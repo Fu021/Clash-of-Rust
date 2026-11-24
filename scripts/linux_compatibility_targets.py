@@ -115,7 +115,7 @@ def fedora_target(build, arch, digest, *, variant='Generic', runner_release='24.
     root = f'https://dl.fedoraproject.org/pub/fedora/linux/releases/{release}/Cloud/{image_arch}/images'
     return Target('fedora', release, arch, f'{root}/Fedora-Cloud-Base-{variant}-{build}.{image_arch}.qcow2',
                   digest, writable_arm_uefi=arch == 'arm64' and variant == 'UEFI-UKI',
-                  vm_runner_release=runner_release)
+                  vm_runner_release=runner_release, full_desktop=arch == 'arm64')
 
 
 def leap_target(release, build, arch, digest):
@@ -171,6 +171,9 @@ TARGETS = {
     'fedora': (
         fedora_target('44-1.7', 'x64', '28680fe5b371a5a82ebf43a31926e086a168e59949d03969c5093e7071f90b7f'),
         fedora_target('45-1.4', 'x64', '50bdc5e70f6a24f540932d15411c1c6ae9fcfa40fb990d876d83c5cc823b2ad0'),
+        fedora_target('44-1.7', 'arm64', '55c60a3b80d3616a08705afd0459e75fe9f03c54aba7a46e4002a41a72fa0d5b'),
+        fedora_target('45-1.4', 'arm64', 'f51f556104434e66df591d647d3e54254cc722378c5ac31c4b1c37b15075e4f1',
+                      variant='UEFI-UKI', runner_release='26.04'),
     ),
     'opensuse': (
         leap_target('16.0', '18.95', 'x64', 'cdf1e5eefc20b7479059eb7ef12694e395d787168a11792997a0209499084ae5'),

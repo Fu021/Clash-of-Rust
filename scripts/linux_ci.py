@@ -515,11 +515,15 @@ class VmGuest:
                    '-cpu', cpu, '-smp', str(cpus), '-m', '4096', '-display', 'none',
                    '-serial', 'stdio', '-monitor', 'none']
         drive = f'file={self.disk},format=qcow2,discard=unmap'
+        fedora_uki = target.family == 'fedora' and target.writable_arm_uefi
         if target.family == 'pop':
             from pop_live_install import DISK_DEVICE
             command.extend(['-drive', drive+',if=none,id=compatdisk', '-device', DISK_DEVICE])
         else:
-            command.extend(['-drive', drive+',if=virtio'])
+            drive += ',if=virtio'
+            if fedora_uki:
+                drive += ',id=compatdisk'
+            command.extend(['-drive', drive])
         if architecture == 'aarch64':
             if target.writable_arm_uefi:
                 firmware = Path('/usr/share/AAVMF')
@@ -529,6 +533,11 @@ class VmGuest:
                     '-drive', f'if=pflash,format=raw,readonly=on,file={firmware/"AAVMF_CODE.fd"}',
                     '-drive', f'if=pflash,format=raw,file={variables}',
                 ])
+                if fedora_uki and not kvm:
+                    command.extend([
+                        '-smbios',
+                        'type=11,value=io.systemd.stub.kernel-cmdline-extra=systemd.default_device_timeout_sec=180',
+                    ])
             else:
                 command.extend(['-bios', '/usr/share/qemu-efi-aarch64/QEMU_EFI.fd'])
             if target.full_desktop:
@@ -623,6 +632,8 @@ class VmGuest:
                 raise RuntimeError(f'{target.distribution} {target.release} requires kernel '
                                    f'{target.kernel_series}, booted {self.kernel}')
             self.boot_seconds = round(time.monotonic() - boot_started, 3)
+            if fedora_uki and target.full_desktop:
+                self.expand_fedora_uki_disk()
         except BaseException:
             self.close()
             raise
@@ -649,6 +660,23 @@ class VmGuest:
             command.append('24G')
         run(command)
         return seed
+
+    def expand_fedora_uki_disk(self):
+        from linux_vm_monitor import Monitor
+
+        root = self.output('findmnt -nr --nofsroot -o SOURCE,FSTYPE --target /').strip()
+        if root != '/dev/vda2 btrfs':
+            raise RuntimeError(f'Fedora UKI returned an unexpected root layout: {root!r}')
+        size = 24 * 1024**3
+        monitor = Monitor(self.monitor_path)
+        try:
+            monitor.execute('block_resize', {'device': 'compatdisk', 'size': size})
+        finally:
+            monitor.close()
+        self.remote('sudo timeout 120 sh -c '
+                    + shlex.quote(f'until [ "$(blockdev --getsize64 /dev/vda)" = {size} ]; do sleep 1; done')
+                    + ' && sudo growpart /dev/vda 2 && sudo btrfs filesystem resize max /',
+                    timeout=240)
 
     def wait_cloud_init(self):
         if self.target.image_format == 'iso':

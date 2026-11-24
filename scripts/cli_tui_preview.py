@@ -100,13 +100,16 @@ class Gallery:
                 terminal.wait('输入中')
                 self.capture(terminal, page, title+' · 输入 · '+label, demo=demo)
                 terminal.send(ESCAPE)
-                settle(terminal)
+                terminal.wait(r'(?m)^ *'+re.escape(current)+r'$', regex=True)
             previous = selected(terminal)
+            if any(action in previous for action in actions):
+                return
             terminal.send(DOWN)
-            settle(terminal)
-            current = selected(terminal)
-            if current == previous:
-                break
+            deadline = time.monotonic() + 5
+            while (not (current := selected(terminal)) or current == previous) and time.monotonic() < deadline:
+                terminal.pump(.05)
+            if not current or current == previous:
+                raise RuntimeError(f'Desktop editor selection did not advance: {title}; selected={previous!r}')
             if current in visited:
                 raise RuntimeError(f'Desktop editor looped without reaching its action: {title}')
             visited.add(current)

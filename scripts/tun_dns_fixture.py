@@ -18,6 +18,8 @@ PUBLIC = ('1.1.1.1', '8.8.8.8', '2606:4700:4700::1111', '2001:4860:4860::8888')
 NODE = ('203.0.113.10', '2001:db8:2::10')
 WEBSITE = ('203.0.113.20', '2001:db8:2::20')
 UPDATES = ('192.0.2.254', '2001:db8:1::fe')
+SLOW_WEB_PORT = 18081
+PROTECTED_RESPONSE = b'protected-ok'
 METRICS = {'bootstrap': 0, 'proxied_dns': 0, 'direct_public_dns': 0,
            'node_connections': 0, 'web': 0, 'plaintext_dns': 0,
            'bootstrap_public_lookup': 0, 'resolver_bootstrap': 0,
@@ -75,12 +77,27 @@ def record_update_dns(name, kind, route, response, **fields):
                                   **fields)
 
 
+async def auto_check_head(reader, writer, head):
+    delay = 0.4 if writer.get_extra_info('sockname')[1] == SLOW_WEB_PORT else 0.03
+    while head.startswith(b'HEAD /auto-check '):
+        METRICS['web'] += 1
+        await asyncio.sleep(delay)
+        writer.write(f'HTTP/1.1 200 OK\r\nContent-Length: {len(PROTECTED_RESPONSE)}\r\n\r\n'.encode())
+        await writer.drain()
+        if b'\r\nconnection: close\r\n' in head.lower():
+            return
+        head = await asyncio.wait_for(reader.readuntil(b'\r\n\r\n'), 8)
+
+
 async def http(reader, writer):
     global BLOCK_FIXED_BOOTSTRAP, BLOCK_PUBLIC_DNS, DELAY_NODE6_AAAA
     request_id = None
     drained = False
     try:
         head = await asyncio.wait_for(reader.readuntil(b'\r\n\r\n'), 8)
+        if head.startswith(b'HEAD /auto-check '):
+            await auto_check_head(reader, writer, head)
+            return
         path = head.split(b' ', 2)[1].decode('ascii')
         local = writer.get_extra_info('sockname')[0]
         peer = writer.get_extra_info('peername')[0]
@@ -143,9 +160,8 @@ async def http(reader, writer):
         else:
             METRICS['web'] += 1
             if path == '/auto-check':
-                # Keep loopback measurements nonzero on fast CI hosts.
                 await asyncio.sleep(0.03)
-            body, content_type = b'protected-ok', 'text/plain'
+            body, content_type = PROTECTED_RESPONSE, 'text/plain'
         writer.write(f'HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {len(body)}\r\nConnection: close\r\n\r\n'.encode() + body)
         await writer.drain()
         drained = True
@@ -163,10 +179,7 @@ async def http(reader, writer):
 async def socks(reader, writer):
     remote = None
     try:
-        if writer.get_extra_info('sockname')[1] == 1081:
-            # A second, deliberately slower route makes Auto re-selection
-            # deterministic without relying on public Internet latency.
-            await asyncio.sleep(0.2)
+        slow_route = writer.get_extra_info('sockname')[1] == 1081
         version, size = await reader.readexactly(2)
         assert version == 5
         await reader.readexactly(size)
@@ -185,6 +198,8 @@ async def socks(reader, writer):
         # Only the fixtures are reachable. Domain requests have no OS lookup.
         if host not in (*BOOTSTRAP, *PUBLIC, *WEBSITE, *UPDATES):
             host = WEBSITE[0]
+        if slow_route and port == 80 and host in WEBSITE:
+            port = SLOW_WEB_PORT
         incoming, remote = await asyncio.open_connection(host, port)
         METRICS['node_connections'] += 1
         writer.write(b'\x05\x00\x00\x01\x7f\x00\x00\x01\x00\x00')
@@ -225,7 +240,7 @@ async def main(directory):
     context.load_cert_chain(directory/'server.crt', directory/'server.key')
     servers = []
     for host, family in [('0.0.0.0', socket.AF_INET), ('::', socket.AF_INET6)]:
-        for port in (80, 443, 18080):
+        for port in (80, 443, 18080, SLOW_WEB_PORT):
             servers.append(await asyncio.start_server(http, host, port, family=family,
                                                      ssl=context if port == 443 else None))
         for port in (1080,1081):

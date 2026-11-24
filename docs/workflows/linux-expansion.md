@@ -1,6 +1,6 @@
 # Linux 扩展兼容验证
 
-每个发行版有独立 `workflow_dispatch` 入口，指定同提交成功的 `CI` 运行编号 `run_id`。普通 push/PR 不启动这些 VM。CI 每个 Linux 架构只编译一次并生成 DEB，另从 x64 DEB 组装 Fedora 和 openSUSE 所需的 RPM。发布时按 [Linux 范围](release.md)要求相应回执。
+每个发行版有独立 `workflow_dispatch` 入口，指定同提交成功的 `CI` 运行编号 `run_id`。普通 push/PR 不启动这些 VM。CI 每个 Linux 架构只编译一次并生成 DEB，再从同架构 DEB 组装 Fedora 和 openSUSE 验收使用的 RPM。发布时按 [Linux 范围](release.md)要求相应回执。
 
 每次兼容运行实际安装同源候选包，执行和 CI 相同的基础系统代理和 TUN 流量检查，包含 DNS 与退出恢复。回执列出 `system_proxy` 与 `tun`。新增平台的完整验收可在目标配置中启用 `full_desktop`，覆盖 [三端、桌面登录与包生命周期](install-validation.md#新平台完整验收)。
 
@@ -28,7 +28,7 @@ GUI 夹具收到中断信号后完成清理并保留原始失败。测试账户�
 | --- | --- | --- |
 | Pop!_OS Compatibility | System76 22.04 build 58 和 24.04 build 20（x64） | 离线 `distinst` 后从系统盘启动，用 APT 安装 DEB |
 | Zorin OS Compatibility | Zorin 17.3 Core r2、18.1 Core（x64） | 离线 Ubiquity 安装系统，再用 APT 安装 DEB |
-| Fedora Compatibility | Fedora Cloud Base Generic 44-1.7、45-1.4（x64） | DNF 安装同源 RPM |
+| Fedora Compatibility | Fedora Cloud Base 44-1.7、45-1.4（x64、ARM64） | 45 ARM64 用 UEFI-UKI，其余用 Generic，DNF 安装同源 RPM |
 | openSUSE Compatibility | Leap 16.0 Build 18.95、16.1 Build 3.21、Tumbleweed 20261120（x64） | 可写 Cloud VM，Zypper 安装同源 RPM |
 | Arch Linux Compatibility | 官方 Cloud 20261115.625457（x64） | `makepkg` 从同源 DEB 生成原生包，再由 `pacman` 安装 |
 
@@ -61,6 +61,10 @@ GUI 夹具收到中断信号后完成清理并保留原始失败。测试账户�
 Ubuntu TCG 来宾可在初始化时跳过命令提示和 MOTD 更新统计索引。这两个钩子与依赖解析无关，仿真时会显著延迟 APT 返回。保留软件源的包索引、签名验证和正常 `dpkg` 配置过程。
 
 在一次性 ARM64 TCG 来宾准备 Ubuntu GNOME X11 登录时，`prepare` 为 GNOME Shell 的用户服务保留 360 秒启动时间。本地 Ubuntu 24.04 ARM64 在默认 90 秒内反复重启 GNOME Shell，延长后会话继续初始化并执行应用自启动。
+
+Fedora 45 ARM64 的 UEFI-UKI 镜像在本地 TCG 冷启动时，`/dev/gpt-auto-root` 的等待先于 udev 完成而超时。Fedora ARM64 UKI 的 TCG 启动通过 [systemd-stub 的 SMBIOS 参数](https://www.freedesktop.org/software/systemd/man/257/sd-stub.html#SMBIOS%20Type%2011%20Strings)将设备等待时间设为 180 秒。首启保留官方 GPT 布局，完成 cloud-init 后，完整桌面验收将写入盘扩大到 24 GiB，并扩展已确认的 Btrfs 根分区。
+
+一次性 Fedora ARM64 TCG 来宾为 `org.gnome.Shell@.service` 保留 360 秒启动时间。GNOME Wayland 登录用 logind 的本地主会话、用户总线上的 GNOME Shell 进程和实际 Wayland socket 核对会话身份。
 
 ### 桌面与发行版诊断
 

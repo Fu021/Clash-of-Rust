@@ -144,12 +144,31 @@ def install_login_dependencies(desktop, release):
         run(command, input=original, stdout=subprocess.DEVNULL, timeout=15)
 
 
+def configure_gnome_tcg_budget(desktop, distribution):
+    if desktop == UBUNTU_GNOME:
+        unit = 'org.gnome.Shell@x11.service'
+    elif desktop == GNOME_WAYLAND and distribution == 'fedora':
+        unit = 'org.gnome.Shell@.service'
+    else:
+        return
+    if (os.environ.get('COR_LINUX_VM_ACCELERATION') != 'tcg'
+            or platform.machine().lower() not in ('aarch64', 'arm64')
+            or os.environ.get('COR_LINUX_GUEST') != 'true'
+            or not is_disposable_test_environment()):
+        return
+    dropin = Path('/etc/systemd/user')/f'{unit}.d'
+    run(['sudo', 'install', '-d', '-m', '0755', dropin])
+    run(['sudo', 'tee', dropin/'90-cor-compatibility-tcg.conf'],
+        input='[Service]\nTimeoutStartSec=360s\n', text=True, stdout=subprocess.DEVNULL)
+
+
 def prepare(report, desktop, release):
     distribution = release['ID']
     if desktop == CINNAMON and not Path('/usr/share/xsessions/cinnamon.desktop').is_file():
         raise RuntimeError('The installed Mint guest lacks the Cinnamon X11 session')
     install_login_dependencies(desktop, release)
     run(['sudo', 'systemctl', 'stop', desktop.service])
+    configure_gnome_tcg_budget(desktop, distribution)
     groups = ['--groups', 'sudo'] if desktop in (CINNAMON, COSMIC) else []
     run(['sudo', 'useradd', '--create-home', '--shell', '/bin/bash', *groups, USER])
     password = secrets.token_hex(24)
@@ -181,14 +200,6 @@ def prepare(report, desktop, release):
         config_path = '/etc/gdm3/daemon.conf' if desktop == GNOME else '/etc/gdm3/custom.conf'
         run(['sudo', 'tee', config_path], input=config, text=True,
             stdout=subprocess.DEVNULL)
-        if (desktop == UBUNTU_GNOME and os.environ.get('COR_LINUX_VM_ACCELERATION') == 'tcg'
-                and platform.machine().lower() in ('aarch64', 'arm64')
-                and os.environ.get('COR_LINUX_GUEST') == 'true'
-                and is_disposable_test_environment()):
-            dropin = Path('/etc/systemd/user/org.gnome.Shell@x11.service.d')
-            run(['sudo', 'install', '-d', '-m', '0755', dropin])
-            run(['sudo', 'tee', dropin/'90-cor-compatibility-tcg.conf'],
-                input='[Service]\nTimeoutStartSec=360s\n', text=True, stdout=subprocess.DEVNULL)
     elif desktop == CINNAMON:
         from linux_mint_desktop import stage_authorization
         configure_lightdm('cinnamon')
@@ -237,6 +248,23 @@ def guest_budget(standard, slow):
     return slow if platform.machine().lower() in ('aarch64', 'arm64') else standard
 
 
+def gnome_wayland_display(uid, session, pid, environment):
+    if output(['loginctl', 'show-user', str(uid), '-p', 'Display', '--value']) != session:
+        return None
+    bus_owner = desktop_call(environment, 'busctl', '--user', 'call', 'org.freedesktop.DBus',
+                             '/org/freedesktop/DBus', 'org.freedesktop.DBus',
+                             'GetConnectionUnixProcessID', 's', 'org.gnome.Shell', stderr=subprocess.PIPE)
+    if bus_owner.split() != ['u', pid]:
+        return None
+    session_environment = desktop_call(environment, 'systemctl', '--user', 'show-environment',
+                                       stderr=subprocess.PIPE).splitlines()
+    sockets = [line.removeprefix('WAYLAND_DISPLAY=')
+               for line in session_environment if line.startswith('WAYLAND_DISPLAY=')]
+    if len(sockets) != 1 or sockets[0] not in desktop_wayland_sockets(environment['XDG_RUNTIME_DIR']):
+        return None
+    return {'WAYLAND_DISPLAY': sockets[0], 'XDG_SESSION_TYPE': 'wayland'}
+
+
 def active_desktop(uid, desktop, session_type='x11'):
     sessions = output(['loginctl', 'list-sessions', '--no-legend']).splitlines()
     for line in sessions:
@@ -251,7 +279,7 @@ def active_desktop(uid, desktop, session_type='x11'):
                 or (info.get('Class'), info.get('State'), info.get('Service')) != (
                     'user', 'active', desktop.pam_auto_login)):
             continue
-        if desktop == COSMIC and (info.get('Seat'), info.get('Remote')) != ('seat0', 'no'):
+        if desktop in (COSMIC, GNOME_WAYLAND) and (info.get('Seat'), info.get('Remote')) != ('seat0', 'no'):
             continue
         shell = subprocess.run(['pgrep', '-u', str(uid), '-x', desktop.shell],
                                capture_output=True, text=True, timeout=15)
@@ -272,13 +300,18 @@ def active_desktop(uid, desktop, session_type='x11'):
                             or socket not in desktop_wayland_sockets(f'/run/user/{uid}')):
                         continue
                     display.update(WAYLAND_DISPLAY=socket, XDG_SESSION_TYPE='wayland')
-                if values.get('XDG_SESSION_ID', session) != session:
+                if desktop != GNOME_WAYLAND and values.get('XDG_SESSION_ID', session) != session:
                     continue
-            except subprocess.CalledProcessError:
+                environment = dict(display, XDG_RUNTIME_DIR=f'/run/user/{uid}',
+                                   DBUS_SESSION_BUS_ADDRESS=f'unix:path=/run/user/{uid}/bus',
+                                   XDG_CURRENT_DESKTOP=values.get('XDG_CURRENT_DESKTOP', desktop.environment_name))
+                if desktop == GNOME_WAYLAND:
+                    wayland = gnome_wayland_display(uid, session, pid, environment)
+                    if wayland is None:
+                        continue
+                    environment.update(wayland)
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
                 continue
-            environment = dict(display, XDG_RUNTIME_DIR=f'/run/user/{uid}',
-                               DBUS_SESSION_BUS_ADDRESS=f'unix:path=/run/user/{uid}/bus',
-                               XDG_CURRENT_DESKTOP=values.get('XDG_CURRENT_DESKTOP', desktop.environment_name))
             return {'session': session, 'shell_pid': int(pid), 'logind': info,
                     'desktop_environment': environment['XDG_CURRENT_DESKTOP']}, environment
     return None
@@ -332,7 +365,7 @@ def x11_windows(environment):
 def desktop_wayland_sockets(runtime):
     return set(output(as_user('find', runtime, '-maxdepth', '1', '-type', 's',
                               '(', '-name', 'wayland-*', '-o', '-name', 'cor-wayland', ')',
-                              '-printf', r'%f\n')).splitlines())
+                              '-printf', r'%f\n'), cwd='/').splitlines())
 
 
 def startup_record():
@@ -340,7 +373,7 @@ def startup_record():
     try:
         files = output(as_user('find', HOME/'.local/share', '-maxdepth', '2', '-name',
                                'desktop-startup.json', '-type', 'f'),
-                       stderr=subprocess.DEVNULL).splitlines()
+                       cwd='/', stderr=subprocess.DEVNULL).splitlines()
         if len(files) == 1:
             data = output(as_user('head', '-c', str(limit+1), '--', files[0]))
             if len(data.encode()) <= limit:
@@ -397,7 +430,9 @@ def verify(stage, report, desktop):
         timeout=180 if debian else guest_budget(180, 360))
     report['login'] = login
     prior_session = previous.get('startup', {}).get('session_id')
-    startup_timeout = (135 if background else 110) if debian else guest_budget(90, 300)
+    startup_timeout = 260 if background else 200
+    if not debian:
+        startup_timeout = guest_budget(startup_timeout, 300)
     window_timeout = 45 if debian else guest_budget(45, 180)
     try:
         trace = wait_for_state(

@@ -14,10 +14,12 @@ mod startup_diagnostics;
 const NATIVE_START_TIMEOUT: Duration =
     Duration::from_secs(if cfg!(target_os = "linux") { 15 } else { 5 });
 pub const FOREGROUND_START_TIMEOUT: Duration = if cfg!(target_os = "linux") {
-    Duration::from_secs(90)
+    Duration::from_secs(180)
 } else {
     NATIVE_START_TIMEOUT
 };
+pub const BACKGROUND_START_TIMEOUT: Duration =
+    Duration::from_secs(if cfg!(target_os = "linux") { 240 } else { 120 });
 
 #[derive(Debug, Clone)]
 pub enum Command {

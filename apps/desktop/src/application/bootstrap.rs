@@ -144,7 +144,7 @@ pub(crate) fn run() -> anyhow::Result<()> {
     }
     // Publish the native icon before cold font loading and Geo integrity checks.
     let tray_timeout = if background_start() {
-        Duration::from_secs(120)
+        tray::BACKGROUND_START_TIMEOUT
     } else {
         tray::FOREGROUND_START_TIMEOUT
     };

@@ -524,7 +524,7 @@ class UbuntuVmTests(unittest.TestCase):
 
     def test_fedora_uki_retains_the_official_gpt_geometry(self):
         guest = object.__new__(linux_ci.VmGuest)
-        guest.target = replace(linux_ci.target_for('fedora', '45', 'x64'), arch='arm64', writable_arm_uefi=True)
+        guest.target = linux_ci.target_for('fedora', '45', 'arm64')
         with tempfile.TemporaryDirectory() as temporary, patch.object(linux_ci, 'run') as command:
             guest.directory = Path(temporary)
             guest.disk = guest.directory/'disk.qcow2'
@@ -533,6 +533,24 @@ class UbuntuVmTests(unittest.TestCase):
             user = json.loads((guest.directory/'user-data').read_text().split('\n', 1)[1])
             self.assertEqual(user['growpart'], {'mode': 'off'})
             self.assertIs(user['resize_rootfs'], False)
+
+    def test_fedora_uki_grows_only_the_verified_root_after_boot(self):
+        guest = object.__new__(linux_ci.VmGuest)
+        guest.monitor_path = Path('/private/guest/qmp.sock')
+        with patch.object(guest, 'output', return_value='/dev/vda2 btrfs\n'), \
+                patch.object(guest, 'remote') as remote, patch('linux_vm_monitor.Monitor') as monitor:
+            guest.expand_fedora_uki_disk()
+        monitor.assert_called_once_with(guest.monitor_path)
+        monitor.return_value.execute.assert_called_once_with(
+            'block_resize', {'device': 'compatdisk', 'size': 24 * 1024**3})
+        monitor.return_value.close.assert_called_once_with()
+        self.assertIn('sudo growpart /dev/vda 2 && sudo btrfs filesystem resize max /', remote.call_args.args[0])
+        with patch.object(guest, 'output', return_value='/dev/vdb2 btrfs\n'), \
+                patch.object(guest, 'remote') as remote, patch('linux_vm_monitor.Monitor') as monitor:
+            with self.assertRaisesRegex(RuntimeError, 'unexpected root layout'):
+                guest.expand_fedora_uki_disk()
+            monitor.assert_not_called()
+            remote.assert_not_called()
 
     def test_vm_accepts_cloud_init_recoverable_errors_only_after_completion(self):
         for code, status, fatal in ((2, 'done', False), (2, 'error', True),
@@ -585,6 +603,7 @@ class UbuntuVmTests(unittest.TestCase):
             ('ubuntu', '20.04', False, False), ('debian', '13', True, False),
             ('opensuse', '16.0', True, False), ('debian', '13', True, True),
             ('fedora', '44', True, False), ('fedora', '45', True, False),
+            ('fedora', '45', True, True),
             ('pop', '24.04', True, False), ('pop', '24.04', False, False),
         ):
             with self.subTest(suite=suite, desktop=needs_gpu, kvm=kvm), \
@@ -605,6 +624,7 @@ class UbuntuVmTests(unittest.TestCase):
                         patch.object(linux_ci.socket, 'socket') as socket, \
                         patch.object(linux_ci.shutil, 'copyfile') as copy_firmware, \
                         patch.object(linux_ci.VmGuest, 'cloud_disk', return_value=directory/'seed.img'), \
+                        patch.object(linux_ci.VmGuest, 'expand_fedora_uki_disk') as expand, \
                         patch('linux_vm_monitor.SoftwareDisplay'), \
                         patch('pop_live_install.install') as install_iso, \
                         patch.object(linux_ci.subprocess, 'Popen') as boot, \
@@ -633,6 +653,17 @@ class UbuntuVmTests(unittest.TestCase):
                 else:
                     copy_firmware.assert_not_called()
                     self.assertIn('/usr/share/qemu-efi-aarch64/QEMU_EFI.fd', command)
+                if (suite, release) == ('fedora', '45') and not kvm:
+                    self.assertEqual(command[command.index('-smbios') + 1],
+                                     'type=11,value=io.systemd.stub.kernel-cmdline-extra='
+                                     'systemd.default_device_timeout_sec=180')
+                else:
+                    self.assertNotIn('-smbios', command)
+                if (suite, release) == ('fedora', '45'):
+                    expand.assert_called_once_with()
+                    self.assertTrue(any('if=virtio,id=compatdisk' in argument for argument in command))
+                else:
+                    expand.assert_not_called()
                 if suite == 'pop':
                     install_iso.assert_called_once()
                     self.assertEqual(install_iso.call_args.kwargs['architecture'], 'aarch64')
@@ -804,6 +835,16 @@ class UbuntuVmTests(unittest.TestCase):
                              if call.args[0] == ['sudo', 'tee', dropin]]
                 self.assertEqual(overrides, ['[Service]\nTimeoutStartSec=360s\n'] if expected else [])
 
+    def test_fedora_uses_the_gnome_template_for_the_tcg_login_budget(self):
+        dropin = Path('/etc/systemd/user/org.gnome.Shell@.service.d/90-cor-compatibility-tcg.conf')
+        with patch.dict(os.environ, {'COR_LINUX_VM_ACCELERATION': 'tcg', 'COR_LINUX_GUEST': 'true'}), \
+                patch.object(linux_desktop_login.platform, 'machine', return_value='aarch64'), \
+                patch.object(linux_desktop_login, 'is_disposable_test_environment', return_value=True), \
+                patch.object(linux_desktop_login, 'run') as execute:
+            linux_desktop_login.configure_gnome_tcg_budget(linux_desktop_login.GNOME_WAYLAND, 'fedora')
+        self.assertEqual(execute.call_args.args[0], ['sudo', 'tee', dropin])
+        self.assertEqual(execute.call_args.kwargs['input'], '[Service]\nTimeoutStartSec=360s\n')
+
     def test_debian_desktop_setup_installs_screenshot_tool(self):
         for version in ('12', '13'):
             with self.subTest(version=version), \
@@ -953,7 +994,7 @@ class UbuntuVmTests(unittest.TestCase):
                     patch.object(linux_desktop_login, 'desktop_call', return_value='b true') as query:
                 with self.assertRaisesRegex(RuntimeError, 'initialization failed: No tray host'):
                     linux_desktop_login.verify('first-login', report, desktop)
-            self.assertEqual([poll.kwargs['timeout'] for poll in wait_for.call_args_list], [180, 110])
+            self.assertEqual([poll.kwargs['timeout'] for poll in wait_for.call_args_list], [180, 200])
             self.assertEqual(report['login'], login)
             self.assertEqual(report['startup_observed'], trace)
             self.assertEqual(report['notifier_host_state'], 'b true')
@@ -977,7 +1018,7 @@ class UbuntuVmTests(unittest.TestCase):
                     patch.object(linux_desktop_login, 'wait_for', side_effect=outcomes) as wait_for:
                 with self.assertRaisesRegex(TimeoutError, 'tray never registered'):
                     linux_desktop_login.verify('first-login', {}, linux_desktop_login.GNOME)
-        self.assertEqual([poll.kwargs['timeout'] for poll in wait_for.call_args_list], [180, 110, 19])
+        self.assertEqual([poll.kwargs['timeout'] for poll in wait_for.call_args_list], [180, 130, 19])
 
     def test_cosmic_first_login_verifies_authorization_without_a_screenshot_portal(self):
         login = {'session': 'active'}
@@ -1085,6 +1126,34 @@ class UbuntuVmTests(unittest.TestCase):
                 else:
                     self.assertIsNone(observation)
 
+    def test_gnome_wayland_login_binds_the_session_to_the_shell_bus_owner_and_socket(self):
+        for local, session, owner, socket_present, expected in (
+                (True, '36', 'u 4428', True, True),
+                (False, '36', 'u 4428', True, False),
+                (True, '35', 'u 4428', True, False),
+                (True, '36', 'u 4429', True, False),
+                (True, '36', 'u 4428', False, False)):
+            with self.subTest(local=local, session=session, owner=owner, socket_present=socket_present), \
+                    patch.object(linux_desktop_login, 'output', side_effect=[
+                        '36 1001 cor-desktop-login seat0',
+                        'Type=wayland\nClass=user\nState=active\nService=gdm-autologin\n'
+                        f'Seat=seat0\nRemote={"no" if local else "yes"}',
+                        'XDG_CURRENT_DESKTOP=GNOME\0',
+                        session,
+                    ]), patch.object(linux_desktop_login.subprocess, 'run',
+                                     return_value=SimpleNamespace(stdout='4428\n')), \
+                    patch.object(linux_desktop_login, 'desktop_call', side_effect=[
+                        owner, 'WAYLAND_DISPLAY=wayland-0\nXDG_CURRENT_DESKTOP=GNOME',
+                    ]), patch.object(linux_desktop_login, 'desktop_wayland_sockets',
+                                     return_value={'wayland-0'} if socket_present else set()):
+                active = linux_desktop_login.active_desktop(1001, linux_desktop_login.GNOME_WAYLAND, 'wayland')
+            if expected:
+                login, environment = active
+                self.assertEqual((login['session'], login['shell_pid']), ('36', 4428))
+                self.assertEqual(environment['WAYLAND_DISPLAY'], 'wayland-0')
+            else:
+                self.assertIsNone(active)
+
     def test_mint_cinnamon_prompt_uses_the_session_and_types_the_password_through_stdin(self):
         with tempfile.TemporaryDirectory() as temporary:
             password = Path(temporary)/'test-password'
@@ -1189,7 +1258,7 @@ class UbuntuVmTests(unittest.TestCase):
             'sudo', '-H', '-u', linux_desktop_login.USER, '--', 'find', '/run/user/1001',
             '-maxdepth', '1', '-type', 's', '(', '-name', 'wayland-*', '-o', '-name', 'cor-wayland', ')',
             '-printf', r'%f\n',
-        ])
+        ], cwd='/')
 
     def test_mint_native_gui_requires_a_fresh_session_with_no_running_core(self):
         for backend, previous in (('x11', 'background-login'), ('wayland', 'x11')):
@@ -9430,22 +9499,25 @@ class CompatibilityTests(unittest.TestCase):
                 compatibility.release_suites(scope)
 
     def test_expanded_linux_suites_use_pinned_images_and_native_ci_inputs(self):
-        expected = {'debian': 2, 'linuxmint': 2, 'pop': 2, 'zorin': 2, 'fedora': 2, 'opensuse': 3, 'arch': 1}
-        for suite, count in expected.items():
+        expected = {'debian': (2, 0), 'linuxmint': (2, 0), 'pop': (2, 0), 'zorin': (2, 0),
+                    'fedora': (2, 2), 'opensuse': (3, 0), 'arch': (1, 0)}
+        for suite, (x64, arm64) in expected.items():
             with self.subTest(suite=suite):
                 targets = linux_ci.TARGETS[suite]
-                self.assertEqual(len(targets), count)
-                self.assertTrue(all(not target.full_desktop and not target.hosted for target in targets))
+                self.assertCountEqual([target.arch for target in targets], ['x64'] * x64 + ['arm64'] * arm64)
+                self.assertTrue(all(not target.hosted for target in targets))
+                inputs = compatibility.input_names(suite)
+                self.assertEqual('linux-rpm-x64' in inputs, suite in ('fedora', 'opensuse'))
+                self.assertEqual('linux-rpm-arm64' in inputs, suite == 'fedora')
+                self.assertEqual('package-linux-arm64' in inputs, arm64 > 0)
+                self.assertEqual('linux-tun-test-arm64' in inputs, arm64 > 0)
                 for target in targets:
                     length = 128 if target.digest_algorithm == 'sha512' else 64
                     self.assertRegex(target.image_digest, rf'\A[0-9a-f]{{{length}}}\Z')
-                    self.assertEqual(target.arch, 'x64')
-                self.assertEqual('linux-rpm-x64' in compatibility.input_names(suite),
-                                 suite in ('fedora', 'opensuse'))
-                self.assertFalse(any(name.endswith('-arm64') for name in compatibility.input_names(suite)))
-                for target in targets:
+                    self.assertEqual(target.full_desktop, target.arch == 'arm64')
                     entry = target.matrix_entry()
-                    self.assertEqual(entry['timeout'], 75 if target.image_format == 'iso' else 45)
+                    timeout = 75 if target.image_format == 'iso' else 45
+                    self.assertEqual(entry['timeout'], 120 if target.full_desktop else timeout)
                     self.assertNotIn('qemu-system-gui', entry['qemu'].split())
                     self.assertNotIn('xvfb', entry['qemu'].split())
                 self.assertIn(suite, compatibility.release_suites(suite))
@@ -9462,6 +9534,7 @@ class CompatibilityTests(unittest.TestCase):
                           for target in linux_ci.TARGETS['fedora']}
         self.assertEqual(fedora_runners, {
             ('44', 'x64'): 'ubuntu-24.04', ('45', 'x64'): 'ubuntu-24.04',
+            ('44', 'arm64'): 'ubuntu-24.04-arm', ('45', 'arm64'): 'ubuntu-26.04-arm',
         })
 
     def test_basic_native_guest_installs_network_dependencies_without_a_desktop(self):
@@ -9661,10 +9734,13 @@ class CompatibilityTests(unittest.TestCase):
         step = workflow.split('- name: Assemble the native RPM compatibility candidate\n', 1)[1]
         options, script = step.split('\n        run: |\n', 1)
         self.assertIn('\n        shell: python', options)
-        self.assertIn("matrix.system == 'linux' && matrix.arch == 'x64'", options)
-        script = script.split('\n      - ', 1)[0]
+        self.assertIn("        if: matrix.system == 'linux'\n", options)
+        script, upload = script.split('\n      - ', 1)
         ast.parse('\n'.join(line.removeprefix(' '*10) for line in script.splitlines()))
         self.assertIn('rpm_candidate()', script)
+        upload = upload.split('\n      - ', 1)[0]
+        self.assertIn("        if: matrix.system == 'linux'\n", upload)
+        self.assertIn('          name: linux-rpm-${{ matrix.arch }}\n', upload)
 
     def test_zorin_selects_the_pinned_zstd_initramfs(self):
         boot = '\tlinux\t/casper/vmlinuz maybe-ubiquity quiet splash ---\n'
@@ -9943,6 +10019,19 @@ success="$1"
                     with self.assertRaisesRegex(ValueError, 'differs from the selected CI artifacts or checks'):
                         compatibility.verified_suite(client, source, suite)
 
+    def test_arm64_full_desktop_receipt_binds_only_the_selected_targets(self):
+        for suite, releases in (('ubuntu', ('20.04', '22.04', '24.04', '26.04')), ('fedora', ('44', '45'))):
+            with self.subTest(suite=suite):
+                client, source, receipt = self.client(suite)
+                expected = [{'release': version, 'arch': 'arm64'} for version in releases]
+                self.assertEqual(receipt['full_desktop_targets'], expected)
+                self.assertEqual(compatibility.verified_suite(client, source, suite), receipt)
+                client, source, _ = self.client(suite, receipt_changes={
+                    'full_desktop_targets': [*expected, {'release': releases[0], 'arch': 'x64'}],
+                })
+                with self.assertRaisesRegex(ValueError, 'differs from the selected CI artifacts or checks'):
+                    compatibility.verified_suite(client, source, suite)
+
     def test_arch_artifact_binds_the_actual_producing_attempt_and_identity(self):
         target, = linux_ci.TARGETS['arch']
         run = {'id': 456, 'run_attempt': 2, 'head_sha': self.source_commit}
@@ -10092,8 +10181,8 @@ class ReleaseTests(unittest.TestCase):
         self.assertNotIn(name, release.filenames(self.version))
         self.assertEqual(release.filenames(self.version, rpm_arches=('arm64',)) - release.filenames(self.version),
                          {name, name+'.sha256'})
-        self.assertEqual(compatibility.rpm_architectures(('fedora',)), ('x64',))
-        self.assertEqual(compatibility.rpm_architectures(('fedora', 'opensuse')), ('x64',))
+        self.assertEqual(compatibility.rpm_architectures(('fedora',)), ('x64', 'arm64'))
+        self.assertEqual(compatibility.rpm_architectures(('fedora', 'opensuse')), ('x64', 'arm64'))
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
             deb = directory/f'Clash-of-Rust-{self.version}-linux-arm64.deb'
