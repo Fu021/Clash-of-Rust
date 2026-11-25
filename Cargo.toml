@@ -9,7 +9,7 @@ i-slint-backend-android-activity = { path = "vendor/slint-android-activity" }
 winit = { path = "vendor/winit" }
 
 [workspace.package]
-version = "0.7.3-dev.3.memory"
+version = "0.7.3-dev.4.input-recovery"
 edition = "2024"
 license = "GPL-3.0-only"
 
