@@ -186,14 +186,14 @@ def compatibility_dependencies(*, release=None, extended=None):
             return ['git', 'dbus-x11', 'iproute2', 'util-linux', 'libcap2-bin',
                     'x11-utils', 'xdotool', 'wmctrl']
         return list(TEST_PACKAGES)
+    basic = ['dbus', 'iproute2', 'util-linux', 'libcap2-bin']
+    if os.environ.get('COR_LINUX_COMPAT_CONTAINER') == 'true':
+        return basic
     if os.environ.get('COR_LINUX_GUEST') == 'true':
         release = release if release is not None else platform.freedesktop_os_release()
         if (release.get('ID'), release.get('VERSION_ID')) == ('ubuntu', UBUNTU_BASELINE):
             return list(TEST_PACKAGES)
-    basic = ['dbus-x11', 'iproute2', 'util-linux', 'libcap2-bin']
-    if os.environ.get('COR_LINUX_COMPAT_CONTAINER') != 'true':
-        basic.insert(0, 'git')
-    return basic
+    return ['git', 'dbus-x11', 'iproute2', 'util-linux', 'libcap2-bin']
 
 
 def compatibility_download_dependencies():
@@ -430,6 +430,8 @@ def run_compatibility(distribution, version, arch, *, prepare_desktop_login=Fals
 
     if not is_disposable_test_environment():
         raise RuntimeError('Compatibility tests require a disposable Actions runner or VM')
+    report = ROOT/'target/linux-report/installed-candidate.json'
+    report.unlink(missing_ok=True)
     release = platform.freedesktop_os_release()
     actual = (release.get('ID'), release.get('VERSION_ID', ''), host_arch())
     if actual != (distribution, version, arch):
@@ -444,6 +446,7 @@ def run_compatibility(distribution, version, arch, *, prepare_desktop_login=Fals
     if not binary.is_file():
         binary = ROOT/'dist/linux-tun-test'
     if (receipt['commit'] != commit() or receipt['system'] != 'linux' or receipt['arch'] != arch
+        or type(receipt['ci_run_id']) is not int or receipt['ci_run_id'] < 1
         or receipt['tests_passed'] is not True or receipt['package'] != packages[0].name
         or receipt['sha256'] != sha256(packages[0])
         or receipt['linux_tun_test_sha256'] != sha256(binary)):
@@ -467,10 +470,16 @@ def run_compatibility(distribution, version, arch, *, prepare_desktop_login=Fals
         native_package_tests(packages[0], receipt, binary)
     else:
         linux_package_tests(packages[0], binary, structure=False)
-    if extended_tests():
+    extended = extended_tests()
+    if extended:
         from cli_tui import verify
         installed = Path('/opt/clash-of-rust')
         verify(installed/'cor', installed/'resources', ROOT/'target/linux-report/tui')
+    write_json(report, {'schema': 1, 'distribution': actual[0], 'version_id': actual[1], 'arch': actual[2],
+                        'kernel': platform.release(), 'commit': receipt['commit'], 'ci_run_id': receipt['ci_run_id'],
+                        'package': receipt['package'], 'package_sha256': receipt['sha256'],
+                        'linux_tun_test_sha256': receipt['linux_tun_test_sha256'],
+                        'extended_tests': extended, 'tests_passed': True})
 
 
 def main():

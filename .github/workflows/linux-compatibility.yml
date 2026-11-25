@@ -41,13 +41,23 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           SOURCE_RUN: ${{ inputs.run_id }}
           SUITE: ${{ inputs.suite }}
-          UPDATE_MODE: ${{ inputs.update_from_ci != '' && '--published-update' || '' }}
-        run: python3 scripts/compatibility.py resolve --suite "$SUITE" --run-id "$SOURCE_RUN" ${UPDATE_MODE:+"$UPDATE_MODE"}
+          UPDATE_FROM_CI: ${{ inputs.update_from_ci }}
+          UPDATE_RELEASE: ${{ inputs.update_release }}
+        run: |
+          update=()
+          if [[ -n "$UPDATE_FROM_CI" || -n "$UPDATE_RELEASE" ]]; then
+            if [[ ! "$UPDATE_FROM_CI" =~ ^[1-9][0-9]*$ || -z "$UPDATE_RELEASE" ]]; then
+              echo 'An update exercise requires a previous CI run and the published release tag.' >&2
+              exit 1
+            fi
+            update+=(--published-update)
+          fi
+          python3 scripts/compatibility.py resolve --suite "$SUITE" --run-id "$SOURCE_RUN" "${update[@]}"
   installed:
     name: ${{ matrix.distribution }} ${{ matrix.release }}-${{ matrix.arch }} installed proxy and TUN
     needs: resolve
     runs-on: ${{ matrix.os }}
-    timeout-minutes: ${{ inputs.update_from_ci != '' && matrix.timeout < 120 && 120 || matrix.timeout }}
+    timeout-minutes: ${{ matrix.arch == 'x64' && inputs.update_from_ci != '' && matrix.timeout < 120 && 120 || matrix.timeout }}
     strategy:
       fail-fast: false
       max-parallel: 4
@@ -120,8 +130,8 @@ jobs:
           RELEASE: ${{ matrix.release }}
           EXPECTED_ARCH: ${{ matrix.arch }}
           COR_LINUX_TOOLS_DIR: ${{ runner.temp }}/cor-linux-tools
-          COR_LINUX_UPDATE_FROM_CI: ${{ inputs.update_from_ci }}
-          COR_LINUX_UPDATE_RELEASE: ${{ inputs.update_release }}
+          COR_LINUX_UPDATE_FROM_CI: ${{ matrix.arch == 'x64' && inputs.update_from_ci || '' }}
+          COR_LINUX_UPDATE_RELEASE: ${{ matrix.arch == 'x64' && inputs.update_release || '' }}
         run: >
           python3 scripts/linux_ci.py verify --package-run-id "$SOURCE_RUN"
           --suite "$SUITE" --release "$RELEASE" --expect-arch "$EXPECTED_ARCH"

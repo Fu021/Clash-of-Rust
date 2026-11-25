@@ -27,7 +27,7 @@ import urllib.request
 import uuid
 
 from build_support import ROOT, download as download_original, host_arch, opener, read_json, run, sha256, write_json
-from linux_compatibility_targets import TARGETS, UBUNTU_BASELINE, target_for
+from linux_compatibility_targets import DEB_CONTAINER_INPUTS, TARGETS, UBUNTU_BASELINE, target_for
 
 BASELINE = UBUNTU_BASELINE
 CACHE_ID = 'ubuntu20-v1'
@@ -542,7 +542,7 @@ class VmGuest:
                 command.extend(['-bios', '/usr/share/qemu-efi-aarch64/QEMU_EFI.fd'])
             if target.full_desktop:
                 command.extend(['-device', 'virtio-gpu-pci'])
-        elif target.package_format != 'deb':
+        elif target.package_format != 'deb' or (target.family == 'ubuntu' and target.full_desktop):
             command.extend(['-vga', 'virtio'])
         cosmic = target.full_desktop and (target.family, target.release) == ('pop', '24.04')
         self.monitor_path = directory/'qmp.sock'
@@ -650,9 +650,13 @@ class VmGuest:
         if self.target.writable_arm_uefi:
             user_data['growpart'] = {'mode': 'off'}
             user_data['resize_rootfs'] = False
+        metadata = f'instance-id: cor-linux-{uuid.uuid4().hex}\n'
+        if self.target.family == 'fedora':
+            user_data['preserve_hostname'] = True
+        else:
+            metadata += 'local-hostname: cor-linux-test\n'
         (directory/'user-data').write_text('#cloud-config\n'+json.dumps(user_data))
-        (directory/'meta-data').write_text(
-            'instance-id: cor-linux-' + uuid.uuid4().hex + '\nlocal-hostname: cor-linux-test\n')
+        (directory/'meta-data').write_text(metadata)
         seed = directory/'seed.img'
         run(['cloud-localds', seed, directory/'user-data', directory/'meta-data'])
         command = ['qemu-img', 'create', '-f', 'qcow2', '-F', 'qcow2', '-b', base, self.disk]
@@ -856,9 +860,12 @@ def compatibility_command(target, python, *, prepare_desktop_login=False):
     return command
 
 
-def published_update_command(python, fixture, deadline):
-    return ['/usr/bin/timeout', '--signal=TERM', f'--kill-after={PUBLISHED_UPDATE_CLEANUP_SECONDS}',
-            str(deadline), python, 'scripts/linux_update_compatibility.py', fixture]
+def published_update_command(python, fixture, deadline, *, require_gui=False):
+    command = ['/usr/bin/timeout', '--signal=TERM', f'--kill-after={PUBLISHED_UPDATE_CLEANUP_SECONDS}',
+               str(deadline), python, 'scripts/linux_update_compatibility.py', fixture]
+    if require_gui:
+        command.append('--require-gui')
+    return command
 
 
 def hosted_test(package_run_id, target, fixture=None):
@@ -916,6 +923,9 @@ def container_test(package_run_id, target, image):
             archive = download(inputs()['architectures'][target.arch]['python'],
                                tools_directory()/'python.tar.gz')
             run(['tar', '-xzf', archive, '-C', python, '--strip-components=1'], timeout=60)
+            distribution_inputs = DEB_CONTAINER_INPUTS.get((target.family, target.release), {})
+            for filename, record in distribution_inputs.items():
+                download(record, directory/filename)
             REPORT.mkdir(parents=True, exist_ok=True)
             if not Path('/dev/net/tun').is_char_device():
                 run(['sudo', 'modprobe', 'tun'], timeout=30)
@@ -926,12 +936,14 @@ def container_test(package_run_id, target, image):
                 '--platform', f'linux/{architecture}', '--network', 'bridge',
                 '--mount', f'type=bind,src={directory},dst=/work',
                 '--mount', f'type=bind,src={directory / "scripts"},dst=/work/scripts,readonly',
+                '--mount', f'type=bind,src={python},dst=/work/python,readonly',
                 '--mount', f'type=bind,src={REPORT},dst=/work/target/linux-report',
                 '--workdir', '/work', '--entrypoint', '/bin/sh',
                 '--env', 'GITHUB_ACTIONS=true', '--env', 'COR_LINUX_GUEST=true',
                 '--env', 'COR_LINUX_COMPAT_CONTAINER=true', '--env', 'PYTHONDONTWRITEBYTECODE=1',
                 '--env', 'BUILD_INPUTS_DIR=dependency-snapshot',
-                image, 'scripts/linux-compatibility-container.sh', str(os.getuid()), str(os.getgid()),
+                image, 'scripts/linux-compatibility-container.sh',
+                str(os.getuid()), str(os.getgid()), target.family, target.release,
                 *compatibility_command(target, '/work/python/bin/python3'),
             ]
             try:
@@ -940,6 +952,8 @@ def container_test(package_run_id, target, image):
                 with contextlib.suppress(subprocess.SubprocessError):
                     run(['docker', 'rm', '--force', name], timeout=15)
                 raise
+            if target.family == 'arch':
+                preserve_arch_package(directory/'dist/linux-arch', package_run_id)
         result['success'] = True
     finally:
         result['seconds'] = round(time.monotonic() - started, 3)
@@ -973,11 +987,22 @@ def collect_arch_package(guest, directory, ci_run_id):
         with path.open('wb') as output:
             guest.remote('cat -- ' + shlex.quote(f'cor-source/dist/linux-arch/{filename}'),
                          stdout=output, timeout=120)
+    preserve_arch_package(work, ci_run_id)
+
+
+def preserve_arch_package(work, ci_run_id):
+    from linux_native_package import arch_filename
+
+    source = json.loads((ROOT/'dist/package-receipt.json').read_text())
+    name = arch_filename(source['version'])
     receipt = json.loads((work/'arch-receipt.json').read_text())
     if receipt != {'schema': 1, 'commit': source['commit'], 'ci_run_id': ci_run_id,
                    'source_sha256': source['sha256'], 'package': name, 'sha256': sha256(work/name)}:
         raise ValueError('Recovered Arch package differs from the installed candidate')
-    shutil.copytree(work, ROOT/'dist/linux-arch')
+    output = ROOT/'dist/linux-arch'
+    output.mkdir()
+    for filename in ('arch-receipt.json', name):
+        shutil.copyfile(work/filename, output/filename)
 
 
 def verify_vm_package(guest, directory, package_run_id, frozen=False, timings=None,
@@ -1070,8 +1095,9 @@ def verify_vm_package(guest, directory, package_run_id, frozen=False, timings=No
             try:
                 deadline = (3600 if guest.architecture == 'aarch64' and not guest.kvm
                             else 2400 if slow_guest else 1800)
+                require_gui = guest.target.family == 'ubuntu' and guest.target.full_desktop
                 command = published_update_command('/opt/cor-test-python/bin/python3',
-                                                   'target/linux-update-fixture', deadline)
+                                                   'target/linux-update-fixture', deadline, require_gui=require_gui)
                 guest.remote(guest.environment + shlex.join(command),
                              timeout=deadline + PUBLISHED_UPDATE_CLEANUP_SECONDS
                              + PUBLISHED_UPDATE_TRANSPORT_SECONDS)
@@ -1241,12 +1267,14 @@ def main():
         require_actions()
         if host_arch() != args.expect_arch:
             raise RuntimeError('Linux compatibility runner architecture mismatch')
-        target = target_for(args.suite, args.release, args.expect_arch)
-        verify = hosted_test if target.hosted else vm_test
         old_run = os.environ.get('COR_LINUX_UPDATE_FROM_CI', '')
         release_tag = os.environ.get('COR_LINUX_UPDATE_RELEASE', '')
         if bool(old_run) != bool(release_tag) or (old_run and not old_run.isdecimal()):
             raise ValueError('Published update testing requires both a previous CI run and release tag')
+        if old_run and args.expect_arch != 'x64':
+            raise ValueError('ARM64 compatibility uses the basic container check')
+        target = target_for(args.suite, args.release, args.expect_arch)
+        verify = hosted_test if target.hosted else vm_test
         if old_run:
             from linux_update_compatibility import prepare
             from workflow_artifacts import release_module

@@ -27,9 +27,9 @@ Android 按 ABI 分包，在 CI 候选包阶段用 DEFLATE 级别 9 重压已压
 | Windows x64 / ARM64 | 生成并扫描 EXE；使用含中文与空格的自定义目录验证实际安装、登记位置、服务注册、普通用户代理/TUN、卸载及用户文件保留。更新改动按需检查安装闸门及写入失败回滚；GUI 和服务异常退出归扩展测试。PE 图标、扫描版本和逐文件 SHA256 进入收据。 |
 | macOS Intel / Apple Silicon | 生成 DMG；核对版本、架构、资源及 ad-hoc 签名，并验证安装后代理/TUN；窗口和界面重建归扩展测试。界面辅助包使用独立身份及 `LSUIElement`；没有 Developer ID 与 Apple 公证。 |
 | Linux x64 / ARM64 | 同一份 DEB 先在 Ubuntu 20.04 构建容器安装，再在 Ubuntu 22.04 原生 runner 验证安装后的代理/TUN及授权；GUI 归扩展测试。 |
-| Ubuntu 固定版本 x64 / ARM64 | 独立 [Ubuntu Compatibility](ubuntu-compatibility.md) 复用成功 CI，在对应版本的托管 runner 或 VM 上安装并验证基础代理/TUN。20.04 校验 5.4 GA 内核。 |
-| Debian 12 / 13 x64 | 独立 [Debian Compatibility](debian-compatibility.md) 复用成功 CI，在各版本官方镜像 VM 安装候选包并执行代理/TUN 检查。 |
-| Linux Mint 21.3 / 22.3 Cinnamon x64 | 独立 [Linux Mint Compatibility](linuxmint-compatibility.md) 复用成功 CI，在官方 ISO 安装的 VM 执行代理/TUN 检查。 |
+| Ubuntu 固定版本 x64 / ARM64 | [Ubuntu Compatibility](ubuntu-compatibility.md) 复验候选安装和代理/TUN。ARM64 和 20.04 x64 使用固定的 Ubuntu 容器。显式 x64 更新专项为 20.04 使用 5.4 GA 内核的云镜像。 |
+| Debian 12 / 13 x64 / ARM64 | [Debian Compatibility](debian-compatibility.md) 使用各版本固定的官方容器复验候选安装和代理/TUN。显式 x64 更新专项使用官方云镜像。 |
+| Linux Mint 21.3 / 22.3 Cinnamon x64 | [Linux Mint Compatibility](linuxmint-compatibility.md) 使用对应 Ubuntu 基础镜像和 Mint 签名软件源复验候选安装和代理/TUN。显式跨版本更新使用 Cinnamon 官方 ISO。 |
 | Pop!_OS、Zorin OS、Fedora、openSUSE、Arch Linux | 每个发行版有独立工作流。固定版本、架构、桌面环境和安装格式见 [Linux 扩展兼容验证](linux-expansion.md)。 |
 | Android ARM64 / ARMv7 / x64 | 三种 ABI 候选 APK 核对签名、架构和 16 KiB 对齐；x64 在 Android 16 模拟器执行真实代理/TUN。ARM 实机、键盘与截图专项不因此冒充已验收。 |
 | Android 8.0～16 | 独立 [Android Compatibility](android-compatibility.md) 复用成功 CI 的 x64 APK，11 版本各验证基础代理/TUN；截图及诊断显式按需选择。 |
@@ -54,7 +54,7 @@ Ubuntu 18.04、真实硬件与人工授权仍不在自动矩阵内。临时 gues
 
 ## 新平台完整验收
 
-新增平台工作流首轮以各目标版本和架构的同提交候选包完成整套验收。桌面会话按平台实际支持的桌面、显示协议和托盘宿主选取代表组合，并在报告写明覆盖范围。
+新增桌面操作系统或修改平台集成时，按风险选择代表性版本、架构、显示协议和托盘宿主执行完整验收，并记录范围。现有 Linux 发行版矩阵扩展至 ARM64 时，按 [Linux 基础兼容矩阵](linux-expansion.md#原生包兼容矩阵)验收。具体桌面、授权或更新故障单独复现。
 
 | 范围 | 实际验收 |
 | --- | --- |
@@ -63,7 +63,7 @@ Ubuntu 18.04、真实硬件与人工授权仍不在自动矩阵内。临时 gues
 | 登录自启动 | 在可丢弃系统启动后进入新的真实桌面会话，确认由会话自动执行已安装入口。核对旧入口迁移、注册到实际托盘宿主、后台窗口保持隐藏，并验证从托盘或应用菜单重开都复用原后台。报告保存启动前后会话、进程和托盘证据。 |
 | 系统网络及更新 | 测试代理/TUN、DNS 与退出恢复，验证干净安装、旧版升级、安装失败回退和卸载，逐项核对设置与订阅的保留。 |
 
-首轮目标报告记录失败或未执行项，所有目标通过后生成同提交回执。各平台的基础代理/TUN 验收可继续供日常检查，正式支持范围以完成整套验收的环境为准。
+报告记录所验版本、架构、通过项和未执行项，按报告覆盖范围表述支持与兼容结论。
 
 固定 ISO 的目标在一次性虚拟磁盘上安装，核对安装完成标记、磁盘根文件系统和发行版身份后进入验证。Linux Mint 的测试脚本使用 LightDM 登录 Cinnamon，在 X11 会话检查自启动和图形授权，在 X11 与 Wayland 会话分别检查窗口、托盘、GUI/TUI/CLI 共享后台及系统代理恢复。测试设置和数据写入来宾，原始 ISO 与来宾磁盘只在当前 runner 上使用。
 
@@ -75,6 +75,7 @@ Ubuntu 18.04、真实硬件与人工授权仍不在自动矩阵内。临时 gues
 - Android 收据用 `distribution_signed=false` 标识开发签名候选包。公开发布只接受签名后重新验证并记录 `distribution_signed=true` 的 APK；测试包不能混入正式附件。
 - 最终发布核对 CI 全部必需 job、[发布范围所需兼容回执](release.md#兼容性发布门禁)、附件 digest、内部完整成员、构建身份和包摘要。不发布模式读取九份 CI 候选包；公开模式读取六份 CI 桌面包和本次发布的三份发行签名 APK。
 - `macos-ci-report-*`、`linux-package-report-*` 与 `android-report-*` 保留对应运行的证据和失败诊断，Windows 扩展窗口与更新专项报告按需保存；常规 Windows 代理/TUN 结果见 job 日志。包及源码附件保留 3 天。证据过期则重新运行 CI，不悄悄重建另一份包。
+- Linux 目标的 `installed-candidate.json` 在实际安装和适用探针通过后生成，记录测试环境的实际发行版、架构和运行内核，以及源提交、CI 编号、候选 DEB 和 TUN 探针摘要。登录、包生命周期和公开更新等专项另附回执。
 - Linux VM 的 `vm-guest-report-status.json` 区分 guest 报告已保存、未生成及传输失败。只有完整传输成功才保留归档，安装和网络测试结果以实际任务及收据为准。
 
 ## 资源与权限

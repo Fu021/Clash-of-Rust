@@ -4,13 +4,89 @@ import hashlib
 
 UBUNTU_BASELINE = '20.04'
 OPENSUSE_MIRROR = 'https://ftp.gwdg.de/pub/opensuse'
+JAMMY_CONTAINER = 'docker.io/library/ubuntu@sha256:b000e69a50ff940390233025e7a337fb8469b509e2334fa4d018ac30f3e18cdb'
+NOBLE_CONTAINER = 'docker.io/library/ubuntu@sha256:562111b88caa79c71391c0c4d3c2114a7d5c35915c20561fd893cb1e07929e6b'
+UBUNTU_ARM_RUNNER_CONTAINERS = {
+    '22.04': JAMMY_CONTAINER,
+    '24.04': NOBLE_CONTAINER,
+    '26.04': 'docker.io/library/ubuntu@sha256:d66b366dac61b575bee2aef07e9c26e8070096fbe84a3d4d3eb0da069b5d76db',
+}
 BASIC_CONTAINER_IMAGES = {
+    ('arch', '20261115.625457'): 'docker.io/library/archlinux@sha256:fcee73ea1b96e236248f53a213f71276cc9072d9025b58bce9915e32f19963ae',
+    ('ubuntu', '20.04'): 'docker.io/library/ubuntu@sha256:8feb4d8ca5354def3d8fce243717141ce31e2c428701f6682bd2fafe15388214',
     ('debian', '12'): 'docker.io/library/debian@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc',
     ('debian', '13'): 'docker.io/library/debian@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2',
+    ('fedora', '44'): 'quay.io/fedora/fedora@sha256:e47bc35e0f02d8b490f17c9a11dee69c87a393de8d4e5bc81a3fa04b7a7c7ab9',
+    ('fedora', '45'): 'quay.io/fedora/fedora@sha256:db14be5698ea04f1f9a4f4fb31945205a696a01f1466cf4a7e5f5a77ca3c7a82',
+    ('linuxmint', '21.3'): JAMMY_CONTAINER,
+    ('linuxmint', '22.3'): NOBLE_CONTAINER,
+    ('pop', '22.04'): JAMMY_CONTAINER,
+    ('pop', '24.04'): NOBLE_CONTAINER,
+    ('zorin', '17.3'): JAMMY_CONTAINER,
+    ('zorin', '18.1'): NOBLE_CONTAINER,
+    ('opensuse', '16.0'): 'registry.opensuse.org/opensuse/leap@sha256:9c88da273b41600dfd12790849dfb198ddefed3a109eaf42ada944afb4282a9d',
+    ('opensuse', '16.1'): 'registry.opensuse.org/opensuse/leap@sha256:755746c7eec92fbdd3c4b02be194bfded4a8d4fde0abedf1835f945d403f43c8',
+    ('opensuse', '20261123'): 'registry.opensuse.org/opensuse/tumbleweed@sha256:e81375320e178f55d205d5d1abdec3ebf42ad43e680f757e2d45ba536617f468',
+}
+MINT_CONTAINER_KEYRING = {
+    'url': 'https://fastly.linuxmint.io/pool/main/l/linuxmint-keyring/linuxmint-keyring_2022.06.21_all.deb',
+    'sha256': 'b71be690c543112ea7b65f43e9bbce9a3f17dd5cc784074858f0824154942a99',
+}
+ZORIN_PATCHES_KEY = {
+    'url': 'https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xB2228B8CCA5C00A2C59D35E530FCF8F64F71B61C',
+    'sha256': '1c656c6d675d8854da073f5c192d3a156bf0da3613e7f9ada5b20bd1565a32ca',
+}
+DEB_CONTAINER_INPUTS = {
+    ('linuxmint', '21.3'): {
+        'release-keyring.deb': MINT_CONTAINER_KEYRING,
+        'base-files.deb': {
+            'url': 'https://fastly.linuxmint.io/pool/upstream/b/base-files/base-files_21.3.0_amd64.deb',
+            'sha256': '45a2838973e859a74ee80156bc4dfa6dfe4d63a4f5e15be813bd699badc8c008',
+        },
+    },
+    ('linuxmint', '22.3'): {
+        'release-keyring.deb': MINT_CONTAINER_KEYRING,
+        'base-files.deb': {
+            'url': 'https://fastly.linuxmint.io/pool/upstream/b/base-files/base-files_13ubuntu10mint22.3.0_amd64.deb',
+            'sha256': '9d1e93b0578c4d57e0b873b78ea0926b9a0f75bada90deb9b24599fefd0135db',
+        },
+    },
+    ('pop', '22.04'): {
+        'release-keyring.deb': {
+            'url': 'https://apt.pop-os.org/release/pool/jammy/keyring/'
+                   '356a75e405d00a23889998d2e8f2508a9e67b535/'
+                   'pop-keyring_1.0.0~1641313934~22.04~356a75e_all.deb',
+            'sha256': '9af097d894cf4549484f506c46c22d3139dc095cd0f1185cb7d589bcebbfba39',
+        },
+    },
+    ('pop', '24.04'): {
+        'release-keyring.deb': {
+            'url': 'https://apt.pop-os.org/release/pool/noble/keyring/'
+                   '356a75e405d00a23889998d2e8f2508a9e67b535/'
+                   'pop-keyring_1.0.0~1641313934~24.04~356a75e_all.deb',
+            'sha256': 'c259ecb956c0eda137b3f71e2d547d5e3440b518f96b9fe7f925644039129081',
+        },
+    },
+    ('zorin', '17.3'): {
+        'patches.asc': ZORIN_PATCHES_KEY,
+        'base-files.deb': {
+            'url': 'https://ppa.launchpadcontent.net/zorinos/patches/ubuntu/pool/main/b/base-files/'
+                   'base-files_12ubuntu4.7+zorin2_amd64.deb',
+            'sha256': '452d8e3135efaa75eea2e7c98aa107dfeccc5d34ce704ef6f1c0ab7b73cb0bc5',
+        },
+    },
+    ('zorin', '18.1'): {
+        'patches.asc': ZORIN_PATCHES_KEY,
+        'base-files.deb': {
+            'url': 'https://ppa.launchpadcontent.net/zorinos/patches/ubuntu/pool/main/b/base-files/'
+                   'base-files_13ubuntu10.4+zorin2_amd64.deb',
+            'sha256': '22cf137b5ac4a9e6a0a08faa928166b67256f99f1213113f111ca19f2ea50114',
+        },
+    },
 }
 TUMBLEWEED_REPOMD = {
-    'x86_64': {'20261121': 'd4e2a3bf9bf999e5fab5546f75388a27aac7c1f5384879d26b4f15b988f4a772'},
-    'aarch64': {'20261121': 'eb4a8dc11f34b7db4c419ce9b2f9c6130fe2b45d7b7fb91aee7757439ca86500'},
+    'x86_64': {'20261123': '3e3d5ec33d14143ad87e19aa3359df2e7a85f67b53d0e7be9d2dbb03b36a48bd'},
+    'aarch64': {'20261123': '7c34a91594f384e6c483a06d9ffe635aee95a00c536a55c7f26fdb0f4b513b44'},
 }
 
 
@@ -53,8 +129,10 @@ class Target:
         return self.release.split('.')[0] if self.family == 'zorin' else self.release
 
     def basic_container_image(self, published_update=False):
-        if published_update or self.hosted or self.full_desktop:
+        if (published_update and self.arch == 'x64') or self.full_desktop:
             return ''
+        if self.hosted:
+            return UBUNTU_ARM_RUNNER_CONTAINERS[self.release] if self.arch == 'arm64' else ''
         return BASIC_CONTAINER_IMAGES.get((self.family, self.release), '')
 
     def matrix_entry(self, published_update=False):
@@ -72,8 +150,11 @@ class Target:
         elif self.family == 'pop':
             qemu += ' ovmf libarchive-tools' if self.arch == 'x64' else ' libarchive-tools'
             if self.release == '24.04' and self.full_desktop:
-                qemu += ' qemu-system-gui libgl1-mesa-dri xvfb python3-pil xdotool tesseract-ocr tesseract-ocr-eng'
-        if self.full_desktop:
+                qemu += (' qemu-system-gui qemu-system-modules-opengl libgl1-mesa-dri'
+                         ' xvfb python3-pil xdotool tesseract-ocr tesseract-ocr-eng')
+        if self.family == 'pop' and self.arch == 'arm64':
+            timeout = 180 if self.full_desktop else 120
+        elif self.full_desktop:
             timeout = 180 if self.family == 'ubuntu' else 120
         elif self.hosted:
             timeout = 30
@@ -85,12 +166,6 @@ class Target:
             cache_prefix = f'linux-host-apt-v1-{runner}-{profile}-'
         return {'distribution': self.distribution, 'release': self.release, 'arch': self.arch,
                 'os': runner, 'qemu': qemu, 'timeout': timeout, 'vm_cache_prefix': cache_prefix}
-
-
-def ubuntu_arm_desktop_target(release, series, build, digest):
-    root = f'https://cloud-images.ubuntu.com/releases/{series}/release-{build}'
-    return Target('ubuntu', release, 'arm64', f'{root}/ubuntu-{release}-server-cloudimg-arm64.img',
-                  digest, hosted=True, full_desktop=True)
 
 
 def debian_target(release, series, build, arch, digest):
@@ -127,7 +202,7 @@ def fedora_target(build, arch, digest, *, variant='Generic', runner_release='24.
     root = f'https://dl.fedoraproject.org/pub/fedora/linux/releases/{release}/Cloud/{image_arch}/images'
     return Target('fedora', release, arch, f'{root}/Fedora-Cloud-Base-{variant}-{build}.{image_arch}.qcow2',
                   digest, writable_arm_uefi=arch == 'arm64' and variant == 'UEFI-UKI',
-                  vm_runner_release=runner_release, full_desktop=arch == 'arm64')
+                  vm_runner_release=runner_release)
 
 
 def leap_target(release, build, arch, digest):
@@ -151,11 +226,7 @@ TARGETS = {
         Target('ubuntu', UBUNTU_BASELINE, 'x64', kernel_series='5.4'),
         Target('ubuntu', UBUNTU_BASELINE, 'arm64', kernel_series='5.4'),
         *(Target('ubuntu', release, 'x64', hosted=True) for release in ('22.04', '24.04', '26.04')),
-        Target('ubuntu', '22.04', 'arm64', hosted=True),
-        ubuntu_arm_desktop_target('24.04', 'noble', '20261017',
-                                  '50e24e1fb79e89116e939d90aa7738f7af48c442fa1bc2510131e0b39c50348e'),
-        ubuntu_arm_desktop_target('26.04', 'resolute', '20261108',
-                                  'cf3b8472b84e7de37cdc2d2e9a9bf82b3edf0ab97113a1422eff048f26688e2f'),
+        *(Target('ubuntu', release, 'arm64', hosted=True) for release in ('22.04', '24.04', '26.04')),
     ),
     'debian': (
         debian_target('12', 'bookworm', '20261117-2665', 'x64',
@@ -178,6 +249,8 @@ TARGETS = {
     'pop': (
         pop_target('22.04', 58, '4e1c5e391062c79dc611ce383c2a709fecac36798ebd81444a734fd41252608e'),
         pop_target('24.04', 20, 'a0ef3842ab710db4f4407cf3499560b59dddbbcd59bee17beab7b0e99dc22b4c'),
+        pop_target('24.04', 3, '7b4cce0e92dc5c903464e7e7c33760c4417f1400165e9ecfcd064fbceb68ef22',
+                   arch='arm64'),
     ),
     'zorin': (
         zorin_target('17.3', 'Zorin-OS-17.3-Core-64-bit-r2.iso',
@@ -193,12 +266,12 @@ TARGETS = {
                       variant='UEFI-UKI', runner_release='26.04'),
     ),
     'opensuse': (
-        leap_target('16.0', '18.96', 'x64', '05637a09744708dde5148b49f703bc3192e4fe5f81ea4b104f586b1514b5421c'),
-        leap_target('16.1', '3.22', 'x64', '89d4638c55cb045042fbdd1be57952f9919eeb034caf993389116da118bc6157'),
-        tumbleweed_target('20261121', 'x64', '7ba3b9ed4ea8e86dbf5a5f538870f834d37a2ac30d763e0268f3186dd03ddb95'),
-        leap_target('16.0', '18.96', 'arm64', 'd9094828e22bd0b1a6ff6290d338750cf694dbacf2a191744f49d2f2a0e6b389'),
-        leap_target('16.1', '3.22', 'arm64', '5927563db4344f157209ce68f1bb07f311c83cf504e7b3f66d5eed82c348c555'),
-        tumbleweed_target('20261121', 'arm64', 'bef781e7c43d1cbe184e1b72242a7809d58c7440df7380946169c391e19ae28b'),
+        leap_target('16.0', '18.97', 'x64', '6f41376091084719bdf0a7854e8498cddc0ec8fbbe45b0f4d6317da9ac368c70'),
+        leap_target('16.1', '3.23', 'x64', '563932158571f5e7cd42834aa54f8027be198653844125b7467756a5ec5aa651'),
+        tumbleweed_target('20261123', 'x64', '9a47d43636bea57f0f8b4c4843f3f5e294076c08c17f59ea757b5b3d70838ca7'),
+        leap_target('16.0', '18.97', 'arm64', 'b2da386b7af09f5ece0681c6659cf1f7a6f034799f0c04029c7890c75816c18f'),
+        leap_target('16.1', '3.23', 'arm64', 'ffb95d3c9bb38c5fccb73324f857c2921c24081c1bfdb910981c655e54ecb3cb'),
+        tumbleweed_target('20261123', 'arm64', '4758863fb624f5b2c9116633d4f1d3b1f5990639001660c5686c737cac681b02'),
     ),
     'arch': (
         Target('arch', '20261115.625457', 'x64',

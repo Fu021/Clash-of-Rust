@@ -16,6 +16,8 @@ INSTALLED_READY = (
     'test "$(findmnt -n -o SOURCE --target /)" = /dev/vda2 && '
     'test "$(findmnt -n -o FSTYPE --target /)" = ext4'
 )
+ARM_LIVE_SERVICES_TIMEOUT = 600
+ARM_INSTALL_TIMEOUT = 5400
 
 
 def extract_casper_boot(iso, directory):
@@ -158,13 +160,17 @@ def install(iso, directory, public_key, command, console_log, ssh_unit, install_
             console = Console(serial, console_log)
             console.wait_shell(process)
             if architecture == 'aarch64':
-                console.command('systemctl start dbus.service systemd-logind.service && '
-                                'test -S /run/dbus/system_bus_socket && '
-                                'udevadm wait --timeout=45 /dev/vda', timeout=120)
+                console.command('systemctl start --no-block dbus.service systemd-logind.service && '
+                                'until systemctl is-active --quiet dbus.service && '
+                                'systemctl is-active --quiet systemd-logind.service && '
+                                'test -S /run/dbus/system_bus_socket; do sleep 5; done && '
+                                'udevadm wait --timeout=45 /dev/vda',
+                                timeout=ARM_LIVE_SERVICES_TIMEOUT)
             console.command('mkdir -p /mnt/cor-test && mount -t 9p '
                             '-o trans=virtio,version=9p2000.L,ro cor-test /mnt/cor-test')
             install_command = shlex.join(['sh', '/mnt/cor-test/install.sh', DISK_SERIAL, media])
-            evidence = console.command(install_command, timeout=2100)
+            evidence = console.command(install_command,
+                                       timeout=ARM_INSTALL_TIMEOUT if architecture == 'aarch64' else 2100)
             if 'cor-pop-install-complete' not in evidence.splitlines():
                 raise RuntimeError('Pop!_OS installer did not complete disk provisioning')
             console.command('systemd-run --on-active=2s /usr/bin/systemctl poweroff')

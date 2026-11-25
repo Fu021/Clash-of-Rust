@@ -542,9 +542,22 @@ class LinuxPublishedUpdateTests(unittest.TestCase):
         self.assertEqual([call.kwargs['result'] for call in record.call_args_list],
                          ['rate-limited', 'visible'])
 
+    def test_redacted_update_screenshot_allows_slow_tcg_guest(self):
+        for slow, expected in ((False, 10), (True, 60)):
+            with self.subTest(slow=slow), patch.object(linux_gui, 'tcg_guest', return_value=slow), \
+                    patch.object(linux_gui, 'run') as run:
+                linux_gui.redact_update_image((1280, 900), Path('/tmp/redacted.png'), [])
+            self.assertEqual(run.call_args.kwargs['timeout'], expected)
+
     def test_graphical_update_selects_supported_ubuntu_and_arch_environments(self):
+        extended_guest = {'COR_LINUX_GUEST': 'true', 'COR_CI_EXTENDED_TESTS': 'true'}
         for distro, version, package, arch, environment, expected in (
                 ('ubuntu', '24.04', 'deb', 'x64', {'RUNNER_ENVIRONMENT': 'github-hosted'}, True),
+                ('ubuntu', '20.04', 'deb', 'x64', extended_guest, True),
+                ('ubuntu', '22.04', 'deb', 'x64', extended_guest, True),
+                ('ubuntu', '26.04', 'deb', 'x64', extended_guest, True),
+                ('ubuntu', '26.04', 'deb', 'x64', {'COR_LINUX_GUEST': 'true'}, False),
+                ('ubuntu', '22.04', 'deb', 'x64', {'COR_CI_EXTENDED_TESTS': 'true'}, False),
                 ('ubuntu', '20.04', 'deb', 'arm64', {'COR_LINUX_GUEST': 'true'}, True),
                 ('ubuntu', '22.04', 'deb', 'arm64', {'RUNNER_ENVIRONMENT': 'github-hosted'}, True),
                 ('ubuntu', '24.04', 'deb', 'arm64', {'RUNNER_ENVIRONMENT': 'github-hosted'}, True),
@@ -568,6 +581,42 @@ class LinuxPublishedUpdateTests(unittest.TestCase):
                 patch.object(update.platform, 'freedesktop_os_release',
                              return_value={'ID': 'ubuntu', 'VERSION_ID': '20.04'}):
             self.assertFalse(update.gui_target('deb', 'arm64'))
+        with patch.dict(os.environ, extended_guest, clear=True), \
+                patch.object(update, 'is_disposable_test_environment', return_value=False), \
+                patch.object(update.platform, 'freedesktop_os_release',
+                             return_value={'ID': 'ubuntu', 'VERSION_ID': '22.04'}):
+            self.assertFalse(update.gui_target('deb', 'x64'))
+
+    def test_debian_graphical_update_requires_a_local_extended_arm64_guest(self):
+        for version, arch, local, extended, expected in (
+                ('12', 'arm64', True, True, True),
+                ('13', 'arm64', True, True, True),
+                ('13', 'arm64', False, True, False),
+                ('13', 'arm64', True, False, False),
+                ('13', 'x64', True, True, False),
+                ('11', 'arm64', True, True, False)):
+            with self.subTest(version=version, arch=arch, local=local, extended=extended), \
+                    patch.dict(os.environ, {'COR_CI_EXTENDED_TESTS': str(extended).lower()}, clear=True), \
+                    patch.object(update, 'is_local_guest', return_value=local), \
+                    patch.object(update.platform, 'freedesktop_os_release',
+                                 return_value={'ID': 'debian', 'VERSION_ID': version}):
+                self.assertIs(update.gui_target('deb', arch), expected)
+
+    def test_required_graphical_update_refuses_a_runner_that_would_skip_it(self):
+        fixture = {'schema': 1, 'format': 'deb', 'arch': 'x64', 'previous': {}, 'published': {}}
+        with tempfile.TemporaryDirectory() as temporary, \
+                patch.object(update, 'require_disposable_update_runner'), \
+                patch.object(update, 'host_arch', return_value='x64'), \
+                patch.object(update, 'gui_target', return_value=False), \
+                patch.object(update, 'exercise_cli') as cli, patch.object(update, 'exercise_gui') as gui:
+            directory = Path(temporary)
+            update.write_json(directory/'fixture.json', fixture)
+            with self.assertRaisesRegex(ValueError, 'required graphical update'):
+                update.exercise(directory, require_gui=True)
+            cli.assert_not_called()
+            gui.assert_not_called()
+        command = linux_ci.published_update_command('python3', 'fixture', 60, require_gui=True)
+        self.assertEqual(command[-2:], ['fixture', '--require-gui'])
 
     def test_graphical_update_runs_only_after_successful_cli_on_the_hosted_target(self):
         fixture = {'schema': 1, 'format': 'deb', 'arch': 'x64', 'previous': {}, 'published': {}}
@@ -921,13 +970,14 @@ with fixture_signals():
                           [('Continue', (700, 520, 52, 14)), ('(2s)', (755, 520, 22, 14))]):
             self.assertIsNone(linux_gui.screen_label([countdown], labels['continue']))
 
-    def test_guest_ocr_crops_headers_and_restores_window_coordinates(self):
+    def test_x64_tcg_ocr_crops_headers_and_restores_window_coordinates(self):
         tsv = (
             'level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext\n'
             '5\t1\t1\t1\t1\t1\t20\t12\t32\t24\t90\tSettings\n'
         ).encode()
         region = (60, 44, 1200, 102)
-        with patch.object(linux_gui, 'arm_tcg_guest', return_value=True), \
+        with patch.dict(os.environ, {'COR_LINUX_VM_ACCELERATION': 'tcg'}), \
+                patch.object(linux_gui.platform, 'machine', return_value='x86_64'), \
                 patch.object(linux_gui.subprocess, 'check_output', return_value=b'image') as prepare, \
                 patch.object(linux_gui.subprocess, 'run', return_value=SimpleNamespace(stdout=tsv)) as ocr:
             lines = linux_gui.recognize_update_screen('frame.png', region=region)
@@ -937,7 +987,8 @@ with fixture_signals():
         with tempfile.TemporaryDirectory() as temporary:
             navigation = linux_gui.UpdateNavigation(Path(temporary), self.version)
             navigation.lines = lines
-            with patch.object(linux_gui, 'arm_tcg_guest', return_value=True), \
+            with patch.dict(os.environ, {'COR_LINUX_VM_ACCELERATION': 'tcg'}), \
+                    patch.object(linux_gui.platform, 'machine', return_value='x86_64'), \
                     patch.object(navigation, 'capture', return_value=True) as capture:
                 self.assertEqual(navigation.locate(('Settings',), region=region), (78, 56))
             capture.assert_called_once_with(region=region)
@@ -948,10 +999,13 @@ with fixture_signals():
         error = subprocess.TimeoutExpired(['/private/fixture'], 10)
         self.assertEqual(linux_gui.timeout_evidence(error), {'command': 'other', 'seconds': 10})
         self.assertIsNone(linux_gui.timeout_evidence(ValueError('not a timeout')))
-        with patch.object(linux_gui, 'arm_tcg_guest', return_value=True):
-            self.assertEqual(linux_gui.desktop_update_timeout(), 2700)
-        with patch.object(linux_gui, 'arm_tcg_guest', return_value=False):
-            self.assertEqual(linux_gui.desktop_update_timeout(), linux_gui.DESKTOP_UPDATE_TIMEOUT)
+        for architecture in ('x86_64', 'aarch64'):
+            for acceleration, expected in (('tcg', 2700), ('kvm', linux_gui.DESKTOP_UPDATE_TIMEOUT),
+                                           ('', linux_gui.DESKTOP_UPDATE_TIMEOUT)):
+                with self.subTest(architecture=architecture, acceleration=acceleration), \
+                        patch.dict(os.environ, {'COR_LINUX_VM_ACCELERATION': acceleration}), \
+                        patch.object(linux_gui.platform, 'machine', return_value=architecture):
+                    self.assertEqual(linux_gui.desktop_update_timeout(), expected)
 
     def test_gui_primary_button_ocr_requires_exact_text_and_uses_current_bounds(self):
         bounds = [1050, 119, 88, 36]
@@ -1084,7 +1138,7 @@ with fixture_signals():
                 ((65, 124), (65, 124), True, (76, 48, 311, 92)),
                 (None, (30, 124), True, (76, 48, 311, 92))):
             with self.subTest(home=home, slow=slow), \
-                    patch.object(linux_gui, 'arm_tcg_guest', return_value=slow), \
+                    patch.object(linux_gui, 'tcg_guest', return_value=slow), \
                     patch.multiple(navigation, input=Mock(), wait=Mock(), locate=Mock(return_value=label)):
                 navigation.verify_responsive()
                 self.assertEqual([call.args for call in navigation.input.call_args_list],
@@ -2065,8 +2119,10 @@ with fixture_signals():
                 self.assertIn('update_from_ci: ${{ inputs.update_from_ci }}', text)
                 self.assertIn('update_release: ${{ inputs.update_release }}', text)
         shared = (workflows/'linux-compatibility.yml').read_text()
-        self.assertIn('COR_LINUX_UPDATE_FROM_CI: ${{ inputs.update_from_ci }}', shared)
-        self.assertIn('COR_LINUX_UPDATE_RELEASE: ${{ inputs.update_release }}', shared)
+        self.assertIn("COR_LINUX_UPDATE_FROM_CI: ${{ matrix.arch == 'x64' && inputs.update_from_ci || '' }}",
+                      shared)
+        self.assertIn("COR_LINUX_UPDATE_RELEASE: ${{ matrix.arch == 'x64' && inputs.update_release || '' }}",
+                      shared)
 
 
 if __name__ == '__main__':

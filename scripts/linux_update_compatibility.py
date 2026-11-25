@@ -1,4 +1,5 @@
 """Verify an installed Linux client's update against a published release."""
+import argparse
 import base64
 from contextlib import ExitStack, contextmanager, nullcontext
 import hashlib
@@ -17,7 +18,7 @@ import time
 import compatibility
 from build_support import (ROOT, deb_version, download, host_arch, manifest_version,
                            sha256, validate_version, write_json)
-from linux_guest_environment import is_disposable_test_environment
+from linux_guest_environment import is_disposable_test_environment, is_local_guest
 from linux_native_package import arch_filename, native_version, rpm_filename
 from linux_update_retry import RATE_LIMIT_MESSAGES, ReleaseRateLimit, retry_release_check
 from workflow_artifacts import fetch_package_inputs, release_module
@@ -389,19 +390,28 @@ def verify_upgrade_order(fixture):
 
 
 def gui_target(package_format, arch):
+    from ci_test_policy import extended_tests
+
     release = platform.freedesktop_os_release()
     if package_format == 'pkg':
         return (arch == 'x64' and release.get('ID') == 'arch'
                 and os.environ.get('COR_LINUX_GUEST') == 'true')
-    if package_format != 'deb' or release.get('ID') != 'ubuntu':
+    if package_format != 'deb':
         return False
     version = release.get('VERSION_ID')
+    distribution = release.get('ID')
+    if distribution == 'debian':
+        return arch == 'arm64' and version in ('12', '13') and extended_tests() and is_local_guest()
+    if distribution != 'ubuntu':
+        return False
     hosted = os.environ.get('RUNNER_ENVIRONMENT') == 'github-hosted'
+    guest = os.environ.get('COR_LINUX_GUEST') == 'true' and is_disposable_test_environment()
     if arch == 'x64':
-        return version == '24.04' and hosted
+        return ((version == '24.04' and hosted)
+                or (version in ('20.04', '22.04', '26.04') and guest and extended_tests()))
     if arch != 'arm64' or version not in ('20.04', '22.04', '24.04', '26.04'):
         return False
-    return hosted or (os.environ.get('COR_LINUX_GUEST') == 'true' and is_disposable_test_environment())
+    return hosted or guest
 
 
 @contextmanager
@@ -589,9 +599,11 @@ def exercise_gui(fixture, old_package, *, check_interrupted=None, run_identity=N
         write_gui_receipt(report)
         checkpoint()
         if package_format == 'deb':
+            distribution = platform.freedesktop_os_release().get('ID')
+            agent = 'mate-polkit' if distribution == 'debian' else 'policykit-1-gnome'
             run_installation('from linux_apt import install\ninstall(sys.argv[1:])',
                              'xvfb', 'xauth', 'x11-utils', 'xdotool', 'wmctrl', 'openbox',
-                             'policykit-1-gnome', 'fonts-noto-cjk', 'scrot', 'tesseract-ocr',
+                             agent, 'fonts-noto-cjk', 'scrot', 'tesseract-ocr',
                              'tesseract-ocr-chi-sim', 'tesseract-ocr-eng', 'python3-pil', 'strace',
                              check_interrupted=checkpoint)
         else:
@@ -812,7 +824,7 @@ def exercise_cli(fixture, old_package, *, check_interrupted=None, run_identity=N
         write_receipt(REPORT, report)
 
 
-def exercise(directory):
+def exercise(directory, *, require_gui=False):
     from linux_gui import fixture_signals
 
     require_disposable_update_runner()
@@ -831,6 +843,7 @@ def exercise(directory):
                     'Update fixture is incompatible')
             report_base = {**update_receipt(fixture), **identity}
             graphical = gui_target(fixture['format'], fixture['arch'])
+            require(graphical or not require_gui, 'This runner cannot exercise the required graphical update')
             check_interrupted()
             old_package = fixture_package(directory, fixture)
             receipt = report_base
@@ -854,6 +867,8 @@ def exercise(directory):
 
 
 if __name__ == '__main__':
-    if len(sys.argv) != 2:
-        raise SystemExit('Pass the verified update fixture directory')
-    exercise(Path(sys.argv[1]))
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('directory', type=Path, help='Verified update fixture directory')
+    parser.add_argument('--require-gui', action='store_true')
+    args = parser.parse_args()
+    exercise(args.directory, require_gui=args.require_gui)

@@ -113,11 +113,12 @@ class TunDnsFixtureTests(unittest.TestCase):
             signal.signal(signal.SIGTERM, term_handler)
             signal.signal(signal.SIGINT, int_handler)
 
-    def test_tun_namespace_reserves_the_traffic_budget_after_arm64_cli_checks(self):
+    def test_tun_namespace_reserves_the_traffic_budget_after_cli_checks(self):
         import pwd
         for machine, flags, timeout in (
                 ('x86_64', ['--with-user-tests'], 520),
-                ('x86_64', ['--with-user-tests', '--tcg'], 520),
+                ('x86_64', ['--tcg'], 1480),
+                ('x86_64', ['--with-user-tests', '--tcg'], 3000),
                 ('aarch64', [], 520),
                 ('aarch64', ['--tcg'], 1480),
                 ('aarch64', ['--with-user-tests'], 800),
@@ -534,6 +535,20 @@ class UbuntuVmTests(unittest.TestCase):
             self.assertEqual(user['growpart'], {'mode': 'off'})
             self.assertIs(user['resize_rootfs'], False)
 
+    def test_fedora_cloud_seed_preserves_the_image_hostname(self):
+        guest = object.__new__(linux_ci.VmGuest)
+        with tempfile.TemporaryDirectory() as temporary, patch.object(linux_ci, 'run'):
+            guest.directory = Path(temporary)
+            guest.disk = guest.directory/'disk.qcow2'
+            for suite, release in (('fedora', '44'), ('debian', '12')):
+                with self.subTest(suite=suite):
+                    guest.target = linux_ci.target_for(suite, release, 'x64')
+                    guest.cloud_disk(guest.directory/'upstream.qcow2', 'fixture-public-key')
+                    user = json.loads((guest.directory/'user-data').read_text().split('\n', 1)[1])
+                    metadata = (guest.directory/'meta-data').read_text()
+                    self.assertEqual(user.get('preserve_hostname', False), suite == 'fedora')
+                    self.assertEqual('local-hostname:' in metadata, suite != 'fedora')
+
     def test_fedora_uki_grows_only_the_verified_root_after_boot(self):
         guest = object.__new__(linux_ci.VmGuest)
         guest.monitor_path = Path('/private/guest/qmp.sock')
@@ -777,6 +792,7 @@ class UbuntuVmTests(unittest.TestCase):
             linux_desktop_login.prepare(report, desktop, {'ID': 'arch'})
         install.assert_not_called()
         probe.assert_called_once_with(linux_desktop_login.as_user)
+        self.assertEqual(execute.call_args_list[0], call(['sudo', 'systemctl', 'mask', 'sleep.target']))
         self.assertTrue(any(call.args[0] == ['sudo', 'tee', '/etc/gdm/custom.conf']
                             for call in execute.call_args_list))
         self.assertEqual(report, {'menu_sha256': 'fixture-digest', 'boot_id': 'fixture-boot'})
@@ -1482,7 +1498,8 @@ class UbuntuVmTests(unittest.TestCase):
             directory = Path(temporary)
             archive = directory/'package.tar.gz'
             archive.touch()
-            guest = MagicMock(target=linux_ci.target_for('ubuntu', '26.04', 'arm64'),
+            guest = MagicMock(target=replace(linux_ci.target_for('ubuntu', '26.04', 'arm64'),
+                                             full_desktop=True),
                               environment='guest ', architecture='aarch64', kvm=False)
             with patch.object(linux_ci, 'fetch_vm_package', return_value=archive):
                 linux_ci.verify_vm_package(guest, directory, 123)
@@ -8688,8 +8705,10 @@ runpy.run_path(str(script), run_name='__main__')
                                  [latest, previous])
 
     def test_cache_main_keeps_profiles_architectures_and_unknown_keys_separate(self):
-        ubuntu_vm_prefix = linux_ci.target_for('ubuntu', '20.04', 'x64').matrix_entry()['vm_cache_prefix']
-        mint_vm_prefix = linux_ci.target_for('linuxmint', '21.3', 'x64').matrix_entry()['vm_cache_prefix']
+        ubuntu_vm_prefix = linux_ci.target_for('ubuntu', '20.04', 'x64').matrix_entry(
+            published_update=True)['vm_cache_prefix']
+        mint_vm_prefix = linux_ci.target_for('linuxmint', '21.3', 'x64').matrix_entry(
+            published_update=True)['vm_cache_prefix']
         keys = [
             'native-main-v1-windows-latest-check-Windows_NT-x64-aaaaaaaa-bbbbbbbb',
             'native-main-v1-windows-11-arm-check-Windows_NT-arm64-aaaaaaaa-bbbbbbbb',
@@ -8715,7 +8734,7 @@ runpy.run_path(str(script), run_name='__main__')
 
     def test_cache_retires_vm_tool_profiles_outside_the_active_matrix(self):
         pop = linux_ci.target_for('pop', '24.04', 'x64')
-        basic = pop.matrix_entry()['vm_cache_prefix']
+        basic = pop.matrix_entry(published_update=True)['vm_cache_prefix']
         desktop = replace(pop, full_desktop=True).matrix_entry()['vm_cache_prefix']
         self.assertNotEqual(basic, desktop)
         self.assertFalse(storage.retired(basic+'20261117.1.0'))
@@ -9499,7 +9518,7 @@ class CompatibilityTests(unittest.TestCase):
                 compatibility.release_suites(scope)
 
     def test_expanded_linux_suites_use_pinned_images_and_native_ci_inputs(self):
-        expected = {'debian': (2, 2), 'linuxmint': (2, 0), 'pop': (2, 0), 'zorin': (2, 0),
+        expected = {'debian': (2, 2), 'linuxmint': (2, 0), 'pop': (2, 1), 'zorin': (2, 0),
                     'fedora': (2, 2), 'opensuse': (3, 3), 'arch': (1, 0)}
         for suite, (x64, arm64) in expected.items():
             with self.subTest(suite=suite):
@@ -9514,22 +9533,22 @@ class CompatibilityTests(unittest.TestCase):
                 for target in targets:
                     length = 128 if target.digest_algorithm == 'sha512' else 64
                     self.assertRegex(target.image_digest, rf'\A[0-9a-f]{{{length}}}\Z')
-                    self.assertEqual(target.full_desktop, suite == 'fedora' and target.arch == 'arm64')
+                    self.assertFalse(target.full_desktop)
                     entry = target.matrix_entry(published_update=True)
-                    timeout = 75 if target.image_format == 'iso' else 45
-                    self.assertEqual(entry['timeout'], 120 if target.full_desktop else timeout)
-                    self.assertNotIn('qemu-system-gui', entry['qemu'].split())
+                    timeout = 15 if target.arch == 'arm64' else 75 if target.image_format == 'iso' else 45
+                    self.assertEqual(entry['timeout'], timeout)
                     self.assertNotIn('xvfb', entry['qemu'].split())
                 self.assertIn(suite, compatibility.release_suites(suite))
                 client, source, receipt = self.client(suite)
                 self.assertEqual(compatibility.verified_suite(client, source, suite), receipt)
                 if suite != 'debian':
                     key = 'iso_targets' if targets[0].image_format == 'iso' else 'cloud_targets'
-                    client, source, _ = self.client(suite, receipt_changes={key: receipt[key][1:]})
-                    with self.assertRaisesRegex(ValueError, 'differs from the selected CI artifacts'):
-                        compatibility.verified_suite(client, source, suite)
+                    if key in receipt:
+                        client, source, _ = self.client(suite, receipt_changes={key: receipt[key][1:]})
+                        with self.assertRaisesRegex(ValueError, 'differs from the selected CI artifacts'):
+                            compatibility.verified_suite(client, source, suite)
         self.assertEqual({(target.release, target.arch) for target in linux_ci.TARGETS['pop']},
-                         {('22.04', 'x64'), ('24.04', 'x64')})
+                         {('22.04', 'x64'), ('24.04', 'x64'), ('24.04', 'arm64')})
         fedora_runners = {(target.release, target.arch): target.matrix_entry()['os']
                           for target in linux_ci.TARGETS['fedora']}
         self.assertEqual(fedora_runners, {
@@ -9840,18 +9859,30 @@ success="$1"
                                   arguments)
                     self.assertNotIn('-cdrom', arguments)
                     self.assertEqual(console.return_value.command.call_args_list[0],
-                                     call('systemctl start dbus.service systemd-logind.service && '
-                                          'test -S /run/dbus/system_bus_socket && '
-                                          'udevadm wait --timeout=45 /dev/vda', timeout=120))
+                                     call('systemctl start --no-block dbus.service systemd-logind.service && '
+                                          'until systemctl is-active --quiet dbus.service && '
+                                          'systemctl is-active --quiet systemd-logind.service && '
+                                          'test -S /run/dbus/system_bus_socket; do sleep 5; done && '
+                                          'udevadm wait --timeout=45 /dev/vda',
+                                          timeout=pop_live_install.ARM_LIVE_SERVICES_TIMEOUT))
                 else:
                     self.assertEqual(arguments[arguments.index('-cdrom')+1], directory/'pop.iso')
                     self.assertNotIn('systemd.mask=distinst-v2.service', kernel_args)
                 console.return_value.command.assert_any_call(
-                    f'sh /mnt/cor-test/install.sh {pop_live_install.DISK_SERIAL} {media}', timeout=2100)
+                    f'sh /mnt/cor-test/install.sh {pop_live_install.DISK_SERIAL} {media}',
+                    timeout=5400 if arch == 'aarch64' else 2100)
 
     def test_arm_vm_targets_install_the_virtio_net_rom(self):
-        target = replace(linux_ci.target_for('ubuntu', '20.04', 'x64'), arch='arm64')
-        self.assertIn('ipxe-qemu', target.matrix_entry()['qemu'].split())
+        target = replace(linux_ci.target_for('ubuntu', '20.04', 'x64'), arch='arm64', full_desktop=True)
+        self.assertIn('ipxe-qemu', target.matrix_entry(published_update=True)['qemu'].split())
+
+    def test_cosmic_desktop_vm_installs_qemu_opengl_modules(self):
+        for arch in ('x64', 'arm64'):
+            with self.subTest(arch=arch):
+                target = replace(linux_ci.target_for('pop', '24.04', arch), full_desktop=True)
+                tools = target.matrix_entry()['qemu'].split()
+                self.assertIn('qemu-system-modules-opengl', tools)
+                self.assertIn('qemu-system-gui', tools)
 
     def test_versioned_native_packages_and_receipt_never_accept_other_bytes(self):
         from linux_native_package import native_version, verify_rpm
@@ -9928,13 +9959,17 @@ success="$1"
                    'checks': compatibility.CHECKS[suite],
                    'inputs': [{key: item[key] for key in ('id', 'name', 'digest')} for item in inputs],
                    **compatibility.desktop_targets(suite)}
-        containers = compatibility.container_targets(suite)
-        receipt.update({'published_update': True} if published_update and containers else containers)
+        receipt.update(compatibility.container_targets(suite, published_update=published_update))
+        if published_update:
+            receipt['published_update'] = True
         if suite in ('linuxmint', 'pop', 'zorin', 'fedora', 'opensuse', 'arch'):
             source_kind = 'iso' if suite in ('linuxmint', 'pop', 'zorin') else 'cloud'
-            receipt[source_kind+'_targets'] = [
+            images = [
                 {'release': target.release, 'arch': target.arch, 'url': target.image_url,
-                 'sha256': target.image_digest} for target in linux_ci.TARGETS[suite]]
+                 'sha256': target.image_digest} for target in linux_ci.TARGETS[suite]
+                if not target.basic_container_image(published_update)]
+            if images:
+                receipt[source_kind+'_targets'] = images
         candidate = {'id': 321, 'name': 'linux-arch-x64-attempt-1', 'digest': 'sha256:' + 'a' * 64}
         if suite == 'arch':
             receipt['arch_package'] = candidate.copy()
@@ -10030,7 +10065,7 @@ success="$1"
             self.assertRegex(item['image'], r'\Adocker\.io/library/debian@sha256:[0-9a-f]{64}\Z')
         for entry in compatibility.suite_matrix(suite)['include']:
             self.assertEqual((entry['timeout'], entry['qemu'], entry['vm_cache_prefix']), (15, '', ''))
-        self.assertTrue(all(entry['qemu'] for entry in
+        self.assertTrue(all(bool(entry['qemu']) == (entry['arch'] == 'x64') for entry in
                             compatibility.suite_matrix(suite, published_update=True)['include']))
         client, source, _ = self.client(suite, receipt_changes={'container_targets': images[1:]})
         with self.assertRaisesRegex(ValueError, 'differs from the selected CI artifacts or checks'):
@@ -10038,17 +10073,75 @@ success="$1"
         client, source, receipt = self.client(suite, published_update=True)
         self.assertEqual(compatibility.verified_suite(client, source, suite), receipt)
 
-    def test_arm64_full_desktop_receipt_binds_only_the_selected_targets(self):
-        for suite, releases in (('ubuntu', ('24.04', '26.04')), ('fedora', ('44', '45')),
-                                ('debian', ()), ('opensuse', ())):
-            with self.subTest(suite=suite):
-                client, source, receipt = self.client(suite)
-                expected = [{'release': version, 'arch': 'arm64'} for version in releases]
-                self.assertEqual(receipt.get('full_desktop_targets', []), expected)
+    def test_opensuse_basic_uses_containers_and_published_updates_keep_cloud_images(self):
+        suite = 'opensuse'
+        basic = compatibility.suite_matrix(suite)['include']
+        update = compatibility.suite_matrix(suite, published_update=True)['include']
+        self.assertEqual(len(basic), 6)
+        self.assertTrue(all(not entry['qemu'] and not entry['vm_cache_prefix'] for entry in basic))
+        self.assertTrue(all(bool(entry['qemu']) == (entry['arch'] == 'x64') for entry in update))
+        for published_update in (False, True):
+            with self.subTest(published_update=published_update):
+                client, source, receipt = self.client(suite, published_update=published_update)
+                self.assertEqual('cloud_targets' in receipt, published_update)
+                self.assertIn('container_targets', receipt)
+                if published_update:
+                    self.assertTrue(all(target['arch'] == 'arm64' for target in receipt['container_targets']))
                 self.assertEqual(compatibility.verified_suite(client, source, suite), receipt)
-                first_release = linux_ci.TARGETS[suite][0].release
+
+    def test_arch_uses_the_container_for_basics_and_keeps_the_tested_artifact(self):
+        for published_update in (False, True):
+            with self.subTest(published_update=published_update):
+                target, = compatibility.suite_matrix('arch', published_update=published_update)['include']
+                self.assertEqual(bool(target['qemu']), published_update)
+                client, source, receipt = self.client('arch', published_update=published_update)
+                self.assertEqual('container_targets' in receipt, not published_update)
+                self.assertEqual('cloud_targets' in receipt, published_update)
+                self.assertIn('arch_package', receipt)
+                self.assertIn('terminal_update', receipt['checks'])
+                self.assertEqual(compatibility.verified_suite(client, source, 'arch'), receipt)
+
+    def test_basic_receipts_do_not_claim_desktop_checks(self):
+        for suite in linux_ci.TARGETS:
+            with self.subTest(suite=suite):
+                for entry in compatibility.suite_matrix(suite)['include']:
+                    self.assertFalse(entry['qemu'])
+                    self.assertFalse(entry['vm_cache_prefix'])
+                client, source, receipt = self.client(suite)
+                self.assertNotIn('full_desktop_targets', receipt)
+                self.assertEqual(compatibility.verified_suite(client, source, suite), receipt)
+                target = linux_ci.TARGETS[suite][0]
                 client, source, _ = self.client(suite, receipt_changes={
-                    'full_desktop_targets': [*expected, {'release': first_release, 'arch': 'x64'}],
+                    'full_desktop_targets': [{'release': target.release, 'arch': target.arch}],
+                })
+                with self.assertRaisesRegex(ValueError, 'differs from the selected CI artifacts or checks'):
+                    compatibility.verified_suite(client, source, suite)
+
+    def test_ubuntu_derived_containers_bind_distribution_inputs_and_preserve_update_vms(self):
+        for suite, filenames, releases in (
+                ('linuxmint', {'release-keyring.deb', 'base-files.deb'}, {'21.3', '22.3'}),
+                ('pop', {'release-keyring.deb'}, {'22.04', '24.04'}),
+                ('zorin', {'patches.asc', 'base-files.deb'}, {'17.3', '18.1'})):
+            with self.subTest(suite=suite):
+                basic = compatibility.suite_matrix(suite)['include']
+                pairs = {(version, 'x64') for version in releases}
+                if suite == 'pop':
+                    pairs.add(('24.04', 'arm64'))
+                self.assertEqual({(entry['release'], entry['arch']) for entry in basic}, pairs)
+                self.assertTrue(all(not entry['qemu'] for entry in basic))
+                self.assertTrue(all(bool(entry['qemu']) == (entry['arch'] == 'x64') for entry in
+                                    compatibility.suite_matrix(suite, published_update=True)['include']))
+                client, source, receipt = self.client(suite)
+                self.assertEqual(compatibility.verified_suite(client, source, suite), receipt)
+                targets = receipt['container_targets']
+                for target in targets:
+                    self.assertEqual(set(target['distribution_inputs']), filenames)
+                    for record in target['distribution_inputs'].values():
+                        self.assertTrue(record['url'].startswith('https://'))
+                        self.assertRegex(record['sha256'], r'\A[0-9a-f]{64}\Z')
+                missing = {key: value for key, value in targets[0].items() if key != 'distribution_inputs'}
+                client, source, _ = self.client(suite, receipt_changes={
+                    'container_targets': [missing, *targets[1:]],
                 })
                 with self.assertRaisesRegex(ValueError, 'differs from the selected CI artifacts or checks'):
                     compatibility.verified_suite(client, source, suite)
@@ -10081,14 +10174,15 @@ success="$1"
                 compatibility.arch_package_artifact(run, [jobs[0] | {'run_attempt': attempt}], [artifact])
 
     def test_mint_receipt_requires_both_pinned_iso_digests(self):
-        _, _, receipt = self.client('linuxmint')
+        _, _, receipt = self.client('linuxmint', published_update=True)
         targets = receipt['iso_targets']
         self.assertEqual({target['release'] for target in targets}, {'21.3', '22.3'})
         self.assertEqual(compatibility.input_names('linuxmint'),
                          ('package-linux-x64', 'linux-tun-test-x64', 'dependency-snapshot'))
         for changed in ([targets[0]], [targets[0], targets[1] | {'sha256': 'f' * 64}]):
             with self.subTest(changed=changed):
-                client, source, _ = self.client('linuxmint', receipt_changes={'iso_targets': changed})
+                client, source, _ = self.client('linuxmint', receipt_changes={'iso_targets': changed},
+                                                published_update=True)
                 with self.assertRaisesRegex(ValueError, 'differs from the selected CI artifacts or checks'):
                     compatibility.verified_suite(client, source, 'linuxmint')
 
@@ -10127,8 +10221,7 @@ success="$1"
                 runner_release = entry['release'] if direct else '24.04'
                 suffix = '-arm' if entry['arch'] == 'arm64' else ''
                 self.assertEqual(entry['os'], f'ubuntu-{runner_release}{suffix}')
-                desktop_guest = entry['arch'] == 'arm64' and entry['release'] in ('24.04', '26.04')
-                self.assertEqual(bool(entry['qemu']), suite == 'ubuntu' and (not direct or desktop_guest))
+                self.assertFalse(entry['qemu'])
             self.assertIn('workflow_dispatch:', wrapper)
             self.assertIn('name: Linux\n', wrapper)
             self.assertIn('uses: ./.github/workflows/linux-compatibility.yml', wrapper)
@@ -10139,6 +10232,45 @@ success="$1"
                           'linux-tun-test-x64', 'linux-tun-test-arm64', 'dependency-snapshot'))
         self.assertEqual(len(release.CI_JOBS), 13)
         self.assertIn('Prepare Android Maven dependencies', release.CI_JOBS)
+
+    def test_installed_candidate_receipt_binds_runtime_and_inputs_only_after_success(self):
+        source = 'a' * 40
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            package = root/'dist/candidate.deb'
+            package.parent.mkdir()
+            package.write_bytes(b'candidate')
+            binary = root/'target/linux-tun-test'
+            binary.parent.mkdir()
+            binary.write_bytes(b'probe')
+            report = root/'target/linux-report/installed-candidate.json'
+            receipt = {'commit': source, 'ci_run_id': 123, 'system': 'linux', 'arch': 'arm64',
+                       'package': package.name, 'sha256': build.sha256(package),
+                       'linux_tun_test_sha256': build.sha256(binary), 'tests_passed': True}
+            build.write_json(package.with_name('package-receipt.json'), receipt)
+            build.write_json(report, {'stale': True})
+            with patch.object(release_package, 'ROOT', root), \
+                    patch.object(release_package, 'is_disposable_test_environment', return_value=True), \
+                    patch.object(release_package, 'host_arch', return_value='arm64'), \
+                    patch.object(release_package, 'commit', return_value=source), \
+                    patch.object(platform, 'freedesktop_os_release',
+                                 return_value={'ID': 'ubuntu', 'VERSION_ID': '22.04'}), \
+                    patch.object(platform, 'release', return_value='fixture-kernel'), \
+                    patch.object(ci_test_policy, 'extended_tests', return_value=False), \
+                    patch.object(release_package, 'prepare_compatibility_environment'), \
+                    patch.object(release_package, 'linux_package_tests',
+                                 side_effect=RuntimeError('installed probe failed')) as installed:
+                with self.assertRaisesRegex(RuntimeError, 'installed probe failed'):
+                    release_package.run_compatibility('ubuntu', '22.04', 'arm64')
+                self.assertFalse(report.exists())
+                installed.side_effect = None
+                release_package.run_compatibility('ubuntu', '22.04', 'arm64')
+            self.assertEqual(json.loads(report.read_text()), {
+                'schema': 1, 'distribution': 'ubuntu', 'version_id': '22.04', 'arch': 'arm64',
+                'kernel': 'fixture-kernel', 'commit': source, 'ci_run_id': 123, 'package': package.name,
+                'package_sha256': receipt['sha256'], 'linux_tun_test_sha256': receipt['linux_tun_test_sha256'],
+                'extended_tests': False, 'tests_passed': True,
+            })
 
     def test_hosted_compatibility_uses_verified_ci_package_and_no_guest(self):
         with tempfile.TemporaryDirectory() as temporary, \
@@ -10167,7 +10299,7 @@ success="$1"
         self.assertEqual(report['runner_image'], 'fixture-image')
         self.assertTrue(report['success'])
 
-    def test_ubuntu_arm64_runs_native_checks_and_passes_the_same_candidate_to_login_vm(self):
+    def test_ubuntu_arm64_runs_native_checks_and_published_update_without_a_guest(self):
         target = linux_ci.target_for('ubuntu', '26.04', 'arm64')
         with tempfile.TemporaryDirectory() as temporary, \
                 patch.dict(os.environ, {'GH_TOKEN': 'fixture-token', 'GITHUB_TOKEN': 'fixture-token'},
@@ -10183,18 +10315,23 @@ success="$1"
         self.assertNotIn('--prepare-desktop-login', native.args[0])
         self.assertIn(Path('/update-fixture'), update.args[0])
         for invocation in (native, update):
-            self.assertEqual(invocation.kwargs['env'], {'COR_CI_EXTENDED_TESTS': 'true'})
-        guest.assert_called_once_with(123, target, package_staged=True)
+            self.assertNotIn('COR_CI_EXTENDED_TESTS', invocation.kwargs['env'])
+        guest.assert_not_called()
         self.assertTrue(report['success'])
 
-    def test_ubuntu_arm64_keeps_qemu_only_when_the_target_requires_a_guest(self):
-        for release, qemu_required in (('20.04', True), ('22.04', False)):
-            with self.subTest(release=release):
-                target = linux_ci.target_for('ubuntu', release, 'arm64')
-                matrix = target.matrix_entry()
-                self.assertFalse(target.full_desktop)
-                self.assertEqual(bool(matrix['qemu']), qemu_required)
-                self.assertEqual(bool(matrix['vm_cache_prefix']), qemu_required)
+    def test_every_arm64_workflow_target_uses_a_native_container_even_in_x64_update_mode(self):
+        for suite, targets in linux_ci.TARGETS.items():
+            for target in targets:
+                if target.arch != 'arm64':
+                    continue
+                with self.subTest(suite=suite, release=target.release):
+                    matrix = target.matrix_entry()
+                    self.assertFalse(target.full_desktop)
+                    self.assertTrue(matrix['os'].endswith('-arm'))
+                    self.assertEqual((matrix['qemu'], matrix['vm_cache_prefix']), ('', ''))
+                    self.assertEqual(matrix, target.matrix_entry(published_update=True))
+                    self.assertRegex(target.basic_container_image(), r'@sha256:[a-f0-9]{64}\Z')
+                    self.assertEqual(target.basic_container_image(), target.basic_container_image(True))
 
 
 class ReleaseTests(unittest.TestCase):
@@ -11091,6 +11228,37 @@ class CosmicDesktopCompatibilityTests(unittest.TestCase):
             scale.assert_called_once_with(screenshot, trim=True)
             recognize.assert_called_with('-', 'Cancel', 1600, 1000, page_mode=11, image=b'cropped image')
 
+    def test_cosmic_cancel_crops_the_confirmed_dialog_button_row(self):
+        import linux_cosmic_authorization
+
+        screenshot = Path('/fixture/dialog.png')
+
+        def word(label, left, top, width, height):
+            return {'text': label, 'left': left, 'top': top, 'width': width, 'height': height, 'conf': 90}
+
+        dialog = [word(label, 1100, 715, 40, 16) for label in ('Authentication', 'TUN', 'Clash', 'Rust')]
+        dialog.extend([word('Required', 1288, 674, 105, 24), word('required', 1213, 714, 55, 14),
+                       word('Password', 1117, 773, 92, 20)])
+        cancel = word('Cancel', 174, 32, 84, 36)
+        authenticate = word('Authenticate', 340, 36, 165, 22)
+        separated = word('Authenticate', 340, 70, 165, 12)
+        crop = (1272, 848, 1544, 892)
+        scaled = b'button row', (1272, 848, 272, 44)
+        with patch.object(linux_cosmic_authorization, 'recognize_words', side_effect=[
+                dialog, [cancel, authenticate], dialog, [cancel, separated],
+                dialog[:-1]]) as recognize, \
+                patch.object(linux_cosmic_authorization, 'enlarged_grayscale', return_value=scaled) as scale:
+            self.assertEqual(linux_cosmic_authorization.recognize_cancel_row(
+                screenshot, 1920, 1200), (1380, 873))
+            self.assertIsNone(linux_cosmic_authorization.recognize_cancel_row(screenshot, 1920, 1200))
+            self.assertIsNone(linux_cosmic_authorization.recognize_cancel_row(screenshot, 1920, 1200))
+        self.assertEqual(scale.call_args_list, [call(screenshot, bounds=crop)]*2)
+        self.assertEqual(recognize.call_args_list, [
+            call(screenshot, page_mode=11), call('-', page_mode=7, image=b'button row'),
+            call(screenshot, page_mode=11), call('-', page_mode=7, image=b'button row'),
+            call(screenshot, page_mode=11),
+        ])
+
     def test_cosmic_authorization_accepts_through_the_visible_password_field(self):
         import linux_cosmic_authorization
 
@@ -11157,12 +11325,14 @@ class CosmicDesktopCompatibilityTests(unittest.TestCase):
                     self.assertEqual(marker.read_text(), 'login 1')
                     marker.write_text('ready')
 
-            with patch.object(linux_cosmic_desktop, 'output', side_effect=['', '1', 'no', '1', 'yes']) as output, \
+            timeout = subprocess.TimeoutExpired('loginctl', 15)
+            replies = [timeout, '', '1', timeout, '1', 'no', '1', 'yes']
+            with patch.object(linux_cosmic_desktop, 'output', side_effect=replies) as output, \
                     patch.object(linux_gui.time, 'sleep', side_effect=acknowledge), \
                     patch.object(linux_cosmic_desktop, 'tun_permissions', return_value=('', 0o755)), \
                     patch.object(linux_cosmic_desktop, 'verify_authorization', return_value={'fixture': True}):
                 linux_cosmic_desktop.authorize(home)
-            self.assertEqual(output.call_count, 5)
+            self.assertEqual(output.call_count, len(replies))
             self.assertEqual(json.loads((home/linux_cosmic_desktop.AUTH_RESULT).read_text()),
                              {'session': '1', 'fixture': True})
             self.assertFalse(password.exists())

@@ -19,7 +19,7 @@ Android 恢复了旧编译对象且交叉 Clippy 报 Slint 或 `slint_macros` �
 | CI | 桌面六平台与 Android 三 ABI 的 Rust 对象、Android 分 ABI 的 Go 对象、Android 共享 Maven 构件及元数据、Ubuntu 20.04 两架构编译容器 | 分发依赖快照、已校验的 Go 源码、本轮共享的 Maven 依赖、候选包及报告 |
 | Memory Benchmark | 各 profile 的 Linux x64 Rust 对象 | 复用冻结输入，保存本次基准的分片和报告 |
 | Android Compatibility | 无 | 复用 CI APK，SDK、模拟器及系统镜像来自 Google 官方源 |
-| Linux 发行版兼容验证 | VM 宿主工具的 DEB 下载，按 runner 和工具组合隔离 | 复用同提交候选包，使用各发行版的固定官方镜像；Ubuntu 20.04 来宾复用同架构的冻结 APT 索引 |
+| Linux 发行版兼容验证 | 使用 VM 的作业缓存宿主工具 DEB，按 runner 和工具组合隔离 | 复用同提交候选包，基础容器按摘要拉取；Ubuntu 20.04 专项来宾复用同架构的冻结 APT 索引 |
 | Publish Release | 无 | 校验同提交候选包和[所需兼容回执](release.md#兼容性发布门禁)，公开模式增加 Android 签名和签名包复验 |
 
 `scripts/workflow_storage.py` 按创建时间保留最新缓存，移除旧代、已退役键及非 `main` 缓存。VM 宿主工具的前缀由当前 Linux 矩阵定义，撤出矩阵的工具配置随收尾清理。`--dry-run` 列出计划删除的条目，`--read-only` 只盘点。CI 和 Memory 共用串行收尾。当最新基线超过 **30 GiB** 时，脚本记录告警并保留这些基线。仓库上限与费用见[缓存容量](cache-capacity.md#当前上限与保留预算)。

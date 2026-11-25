@@ -10,7 +10,7 @@ from pathlib import Path
 from urllib.parse import urlencode
 
 from build_inputs import android_versions
-from linux_compatibility_targets import TARGETS
+from linux_compatibility_targets import DEB_CONTAINER_INPUTS, TARGETS
 from workflow_artifacts import commit, current_ci_artifacts, release_module
 
 RELEASE_SUITES = ('android', 'ubuntu')
@@ -40,30 +40,45 @@ def release_suites(scope):
     return RELEASE_SUITES + tuple(suite for suite in selected if suite not in RELEASE_SUITES)
 
 
-def iso_targets(suite):
+def iso_targets(suite, *, published_update=False):
+    targets = [target for target in TARGETS.get(suite, ())
+               if not target.basic_container_image(published_update)]
     images = [{'release': target.release, 'arch': target.arch,
                'url': target.image_url, 'sha256': target.image_digest}
-              for target in TARGETS.get(suite, ()) if target.image_format == 'iso']
+              for target in targets if target.image_format == 'iso']
     if images:
         return {'iso_targets': images}
     if suite in ('fedora', 'opensuse', 'arch'):
-        return {'cloud_targets': [{'release': target.release, 'arch': target.arch,
-                                   'url': target.image_url, 'sha256': target.image_digest}
-                                  for target in TARGETS[suite]]}
+        clouds = [{'release': target.release, 'arch': target.arch,
+                   'url': target.image_url, 'sha256': target.image_digest}
+                  for target in targets if target.image_url]
+        if clouds:
+            return {'cloud_targets': clouds}
     return {}
 
 
 def desktop_targets(suite):
     targets = [{'release': target.release, 'arch': target.arch}
-               for target in TARGETS.get(suite, ()) if target.full_desktop]
+               for target in TARGETS.get(suite, ())
+               if target.full_desktop]
     return {'full_desktop_targets': targets} if targets else {}
 
 
-def container_targets(suite):
+def container_targets(suite, *, published_update=False):
     targets = [{'release': target.release, 'arch': target.arch, 'image': image}
                for target in TARGETS.get(suite, ())
-               if (image := target.basic_container_image())]
+               if (image := target.basic_container_image(published_update))]
+    for target in targets:
+        if inputs := DEB_CONTAINER_INPUTS.get((suite, target['release'])):
+            target['distribution_inputs'] = inputs
     return {'container_targets': targets} if targets else {}
+
+
+def matrix_evidence(suite, *, published_update=False):
+    containers = container_targets(suite, published_update=published_update)
+    evidence = {'published_update': True} if published_update else {}
+    return {**evidence, **containers, **iso_targets(suite, published_update=published_update),
+            **desktop_targets(suite)}
 
 
 def matrix():
@@ -159,7 +174,8 @@ def resolve(client, repository, expected_commit, run_id=None, suite='android', *
             raise ValueError('Compatibility artifact identity is invalid: ' + name)
         inputs.append({key: found[0][key] for key in ('id', 'name', 'digest')})
     return {'commit': expected_commit, 'ci_run_id': run_id,
-            'matrix': suite_matrix(suite, published_update=published_update), 'inputs': inputs}
+            'matrix': suite_matrix(suite, published_update=published_update),
+            'inputs': inputs}
 
 
 def check_jobs(client, run, suite, include_report):
@@ -215,7 +231,8 @@ def arch_package_artifact(run, jobs, artifacts):
 
 
 def record(client, suite, ci_run_id, output, *, published_update=False):
-    source = resolve(client, client.repo, commit(), ci_run_id, suite)
+    source = resolve(client, client.repo, commit(), ci_run_id, suite,
+                     published_update=published_update)
     run_id = int(os.environ['GITHUB_RUN_ID'])
     run = client(f'/actions/runs/{run_id}')
     if (run.get('id') != run_id
@@ -230,12 +247,10 @@ def record(client, suite, ci_run_id, output, *, published_update=False):
     if os.environ.get('GITHUB_RUN_ATTEMPT') and attempt != int(os.environ['GITHUB_RUN_ATTEMPT']):
         raise ValueError('Compatibility workflow attempt mismatch')
     jobs = check_jobs(client, run, suite, include_report=False)
-    containers = container_targets(suite)
-    execution = {'published_update': True} if published_update and containers else containers
     value = {'schema': 1, 'suite': suite, 'commit': source['commit'],
              'ci_run_id': ci_run_id, 'run_id': run_id, 'run_attempt': attempt,
              'checks': CHECKS[suite], 'inputs': source['inputs'],
-             **iso_targets(suite), **desktop_targets(suite), **execution}
+             **matrix_evidence(suite, published_update=published_update)}
     if suite == 'arch':
         value['arch_package'] = arch_package_artifact(run, jobs, run_artifacts(client, run_id))
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -291,17 +306,15 @@ def verified_suite(client, source_ci, suite, run_id=None):
     expected = {'schema': 1, 'suite': suite, 'commit': expected_commit,
                 'ci_run_id': source_ci['id'], 'run_id': run_id,
                 'run_attempt': run.get('run_attempt', 1),
-                'checks': CHECKS[suite], 'inputs': source['inputs'],
-                **iso_targets(suite), **desktop_targets(suite)}
+                'checks': CHECKS[suite], 'inputs': source['inputs']}
     if suite == 'arch':
         expected['arch_package'] = arch_package_artifact(run, jobs, artifacts)
-    containers = container_targets(suite)
-    execution = ({'published_update': True} if containers and isinstance(receipt, dict)
-                 and receipt.get('published_update') is True else containers)
+    published_update = isinstance(receipt, dict) and receipt.get('published_update') is True
+    expected.update(matrix_evidence(suite, published_update=published_update))
     if (not isinstance(receipt, dict)
             or any(type(receipt.get(key)) is not int
                    for key in ('schema', 'ci_run_id', 'run_id', 'run_attempt'))
-            or receipt != expected | execution):
+            or receipt != expected):
         raise ValueError('Compatibility receipt differs from the selected CI artifacts or checks')
     return receipt
 
@@ -322,7 +335,8 @@ def main():
             parser.error('record requires the source CI --run-id')
         record(client, args.suite, args.run_id, args.output, published_update=args.published_update)
         return
-    plan = resolve(client, repository, commit(), args.run_id, args.suite, published_update=args.published_update)
+    plan = resolve(client, repository, commit(), args.run_id, args.suite,
+                   published_update=args.published_update)
     print(json.dumps(plan))
     if output := os.environ.get('GITHUB_OUTPUT'):
         with Path(output).open('a') as stream:

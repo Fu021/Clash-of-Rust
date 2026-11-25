@@ -166,6 +166,7 @@ def prepare(report, desktop, release):
     distribution = release['ID']
     if desktop == CINNAMON and not Path('/usr/share/xsessions/cinnamon.desktop').is_file():
         raise RuntimeError('The installed Mint guest lacks the Cinnamon X11 session')
+    run(['sudo', 'systemctl', 'mask', 'sleep.target'])
     install_login_dependencies(desktop, release)
     run(['sudo', 'systemctl', 'stop', desktop.service])
     configure_gnome_tcg_budget(desktop, distribution)
@@ -211,6 +212,7 @@ def prepare(report, desktop, release):
             raise RuntimeError('Expected the installed COSMIC greeter without a predefined login')
         config += (f'\n[initial_session]\ncommand = "/usr/bin/start-cosmic"\nuser = "{USER}"\n')
         run(['sudo', 'tee', COSMIC_GREETER_CONFIG], input=config, text=True, stdout=subprocess.DEVNULL)
+        run(as_user('touch', HOME/'.config/cosmic-initial-setup-done'))
         prepare_windows()
         run(['sudo', 'install', '-d', '-m', '0755', COSMIC_PROBES])
         names = ('linux_cosmic_windows.py', 'linux_cosmic_desktop.py', 'linux_gui.py',
@@ -317,9 +319,12 @@ def active_desktop(uid, desktop, session_type='x11'):
     return None
 
 
+def desktop_command(environment, *arguments):
+    return as_user('env', *(f'{key}={value}' for key, value in environment.items()), *arguments)
+
+
 def desktop_call(environment, *arguments, **options):
-    return output(as_user('env', *(f'{key}={value}' for key, value in environment.items()), *arguments),
-                  **options)
+    return output(desktop_command(environment, *arguments), **options)
 
 
 def capture_gnome_failure(stage, desktop=GNOME):
@@ -470,7 +475,8 @@ def verify(stage, report, desktop):
     def windows():
         if desktop == COSMIC:
             from linux_cosmic_windows import windows as inspect_windows
-            return inspect_windows(lambda command: desktop_call(environment, *command))
+            return inspect_windows(lambda command: desktop_call(
+                environment, *command, timeout=guest_budget(15, 60)))
         if desktop == GNOME_WAYLAND:
             from linux_gnome_login import windows as inspect_windows
             return inspect_windows(lambda *command: desktop_call(environment, *command, stderr=subprocess.PIPE))
@@ -507,7 +513,8 @@ def verify(stage, report, desktop):
                 desktop_call(environment, 'wmctrl', '-ic', window)
         report['closed_window'] = wait_for_state('Closing the window did not return the owner to the tray',
                                                  lambda: window_state(False), timeout=window_timeout)
-        desktop_call(environment, 'gtk-launch', MENU.stem)
+        run(desktop_command(environment, 'gtk-launch', MENU.stem), stdout=subprocess.DEVNULL,
+            timeout=guest_budget(15, 60))
         report['menu_reopen'] = wait_for_state('The application menu did not reopen the existing owner',
                                                lambda: window_state(True), timeout=window_timeout)
         run(['sudo', 'systemctl', 'stop', desktop.service])
@@ -610,11 +617,23 @@ def verify_native_cosmic(report):
         raise RuntimeError('COSMIC Wayland verification requires a fresh login after autostart checks')
     uid = pwd.getpwnam(USER).pw_uid
     login, environment = wait_for('COSMIC Greeter did not open a real Wayland session',
-                                  lambda: active_desktop(uid, COSMIC, 'wayland'), timeout=180)
+                                  lambda: active_desktop(uid, COSMIC, 'wayland'), timeout=guest_budget(180, 360))
     report['login'] = login
+    def tray_host_ready():
+        try:
+            return desktop_call(
+                environment, 'busctl', '--user', 'get-property', 'org.kde.StatusNotifierWatcher',
+                '/StatusNotifierWatcher', 'org.kde.StatusNotifierWatcher', 'IsStatusNotifierHostRegistered',
+                stderr=subprocess.PIPE) == 'b true'
+        except subprocess.SubprocessError:
+            return False
+
+    wait_for('COSMIC did not register a tray host in the Wayland session', tray_host_ready,
+             timeout=guest_budget(90, 300))
     if existing := core_processes(uid=uid):
         raise RuntimeError(f'COSMIC session has unexpected cores before GUI launch: {existing}')
-    environment.update(COR_LINUX_GUEST='true', LC_ALL='C.UTF-8')
+    environment.update(COR_LINUX_GUEST='true', LC_ALL='C.UTF-8',
+                       COR_LINUX_VM_ACCELERATION=os.environ.get('COR_LINUX_VM_ACCELERATION', ''))
     command = as_user('env', *(f'{key}={value}' for key, value in environment.items()),
                       '/opt/cor-test-python/bin/python3', '-B', COSMIC_PROBES/'linux_cosmic_desktop.py')
     source = HOME/'gui-wayland'

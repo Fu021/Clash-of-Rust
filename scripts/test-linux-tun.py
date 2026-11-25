@@ -833,7 +833,7 @@ def main():
     binary = args.test_binary.resolve(strict=True)
     user = pwd.getpwuid(args.uid)
     arm_tcg = args.tcg and platform.machine() in ('aarch64', 'arm64')
-    if arm_tcg:
+    if args.tcg:
         tun_timeout = 1200
     else:
         tun_timeout = 360 if args.proxy_benchmark else 240
@@ -888,8 +888,11 @@ def main():
         if args.proxy_benchmark:
             user_tests += ['--proxy-benchmark']
         setup_and_cli_budget = 280
-        if args.with_user_tests and platform.machine() in ('aarch64', 'arm64'):
-            setup_and_cli_budget = 1800 if arm_tcg else 560
+        if args.with_user_tests:
+            if args.tcg:
+                setup_and_cli_budget = 1800
+            elif platform.machine() in ('aarch64', 'arm64'):
+                setup_and_cli_budget = 560
         run(['unshare', '--net', '--pid', '--mount-proc', '--kill-child', '--',
              sys.executable, Path(__file__).resolve(),
              '--inside-namespace', '--test-binary', binary, '--uid', args.uid,

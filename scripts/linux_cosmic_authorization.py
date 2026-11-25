@@ -12,52 +12,92 @@ from build_support import write_json
 from linux_vm_monitor import Monitor, capture_screen
 
 
-def dialog_control(tsv, label, width, height):
-    words = list(csv.DictReader(tsv.splitlines(), delimiter='\t'))
+def is_tun_dialog(words):
     visible = {word.get('text', '').casefold() for word in words}
-    if not {'authentication', 'tun', 'clash', 'rust'} <= visible:
-        return None
+    return {'authentication', 'tun', 'clash', 'rust'} <= visible
+
+
+def word_bounds(words, label, width, height, *, confidence=70):
     matches = [word for word in words if word.get('text', '').casefold() == label.casefold()]
     if len(matches) != 1:
         return None
     control = matches[0]
-    minimum_confidence = 40 if label == 'Password' else 70
     try:
-        if float(control['conf']) < minimum_confidence:
+        if float(control['conf']) < confidence:
             return None
         left, top, span, depth = (int(control[key]) for key in ('left', 'top', 'width', 'height'))
     except (KeyError, ValueError):
         return None
     if not (0 <= left < left+span <= width and 0 <= top < top+depth <= height):
         return None
-    return left + span//2, top + depth//2
+    return left, top, span, depth
 
 
-def recognize_control(source, label, width, height, *, page_mode, image=None):
+def recognize_words(source, *, page_mode, image=None):
     try:
         tsv = subprocess.check_output(
             ['tesseract', source, 'stdout', '--psm', str(page_mode), '-l', 'eng', 'tsv'],
             input=image, stderr=subprocess.DEVNULL, timeout=10,
             env={**os.environ, 'OMP_THREAD_LIMIT': '1'})
     except subprocess.TimeoutExpired:
+        return None
+    return list(csv.DictReader(tsv.decode().splitlines(), delimiter='\t'))
+
+
+def recognize_control(source, label, width, height, *, page_mode, image=None):
+    words = recognize_words(source, page_mode=page_mode, image=image)
+    if words is None:
         return None, False
-    return dialog_control(tsv.decode(), label, width, height), True
+    if is_tun_dialog(words):
+        confidence = 40 if label == 'Password' else 70
+        if bounds := word_bounds(words, label, width, height, confidence=confidence):
+            left, top, span, depth = bounds
+            return (left + span//2, top + depth//2), True
+    return None, True
 
 
-def enlarged_grayscale(screenshot, *, trim):
+def enlarged_grayscale(screenshot, *, trim=False, bounds=None):
     code = (
         'from PIL import Image\n'
         'import struct, sys\n'
         'image = Image.open(sys.argv[1]).convert("L")\n'
-        'bounds = (image.getbbox() if sys.argv[2] == "trim" else None) or (0, 0, *image.size)\n'
+        'bounds = image.getbbox() if sys.argv[2] == "trim" else tuple(map(int, sys.argv[3:]))\n'
+        'bounds = bounds or (0, 0, *image.size)\n'
         'image = image.crop(bounds)\n'
         'sys.stdout.buffer.write(struct.pack(">4I", *bounds))\n'
         'image.resize((image.width * 2, image.height * 2)).save(sys.stdout.buffer, format="PNG")\n'
     )
     data = subprocess.check_output(
-        ['/usr/bin/python3', '-c', code, screenshot, 'trim' if trim else 'full'], timeout=10)
+        ['/usr/bin/python3', '-c', code, screenshot, 'trim' if trim else 'full',
+         *map(str, bounds or ())], timeout=10)
     left, top, right, bottom = struct.unpack('>4I', data[:16])
     return data[16:], (left, top, right-left, bottom-top)
+
+
+def recognize_cancel_row(screenshot, width, height):
+    words = recognize_words(screenshot, page_mode=11)
+    if not words or not is_tun_dialog(words):
+        return None
+    heading = word_bounds([word for word in words if word.get('text') == 'Required'],
+                          'Required', width, height)
+    password = word_bounds(words, 'Password', width, height, confidence=40)
+    if not heading or not password or heading[1] + heading[3] >= password[1]:
+        return None
+    anchor_x, anchor_y = password[0] + password[2]//2, password[1] + password[3]//2
+    heading_gap = anchor_y - heading[1]
+    crop = (anchor_x + heading_gap, anchor_y + 3*heading_gap//5,
+            min(width, anchor_x + 7*heading_gap//2), min(height, anchor_y + heading_gap))
+    if crop[0] >= crop[2] or crop[1] >= crop[3]:
+        return None
+    image, (left, top, span, depth) = enlarged_grayscale(screenshot, bounds=crop)
+    buttons = recognize_words('-', page_mode=7, image=image) or ()
+    cancel = word_bounds(buttons, 'Cancel', 2*span, 2*depth)
+    authenticate = word_bounds(buttons, 'Authenticate', 2*span, 2*depth)
+    if not cancel or not authenticate or cancel[0] + cancel[2] >= authenticate[0]:
+        return None
+    if max(cancel[1], authenticate[1]) >= min(cancel[1]+cancel[3], authenticate[1]+authenticate[3]):
+        return None
+    return left + (cancel[0]+cancel[2]//2)//2, top + (cancel[1]+cancel[3]//2)//2
 
 
 def capture_control(monitor, screenshot, label, environment):
@@ -81,6 +121,11 @@ def capture_control(monitor, screenshot, label, environment):
                                              page_mode=page_mode, image=image)
         if scaled is not None:
             control = left + scaled[0]//2, top + scaled[1]//2
+    if control is None and complete and label == 'Cancel':
+        try:
+            control = recognize_cancel_row(screenshot, width, height)
+        except subprocess.TimeoutExpired:
+            return None
     if control is None:
         return None
     if method == 'x11':

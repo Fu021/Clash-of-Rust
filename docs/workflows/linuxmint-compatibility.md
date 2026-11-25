@@ -2,15 +2,15 @@
 
 [工作流索引](../workflows.md) · [新平台完整验收](install-validation.md#新平台完整验收)
 
-Linux Mint Compatibility 是独立的手动工作流，目标为 Cinnamon x64 的 21.3 和 22.3。两个目标各用一个固定 `ubuntu-24.04` runner。runner 下载并校验固定的官方 ISO，然后在没有网卡的一次性 VM 中从 ISO 安装 Linux Mint，安装服务日志随串口记录，不启用安装器的密码调试日志。镜像和磁盘随 runner 销毁。安装测试复用同提交成功 CI 的 x64 DEB、依赖快照和 TUN 测试程序。
+Linux Mint Compatibility 是独立的手动工作流，目标为 21.3 和 22.3 x64。两个目标均使用 `ubuntu-24.04` runner 上的精简用户态容器，基于固定的 Jammy 或 Noble 镜像。容器安装 SHA256 固定的 Mint `base-files`，使用 [Mint 官方签名软件源](https://linuxmint.com/mirrors.php)及对应 Ubuntu 源。安装测试复用同提交成功 CI 的 x64 DEB、依赖快照和 TUN 测试程序。
 
-从安装好的磁盘启动后才接入虚拟网卡。来宾使用 [Mint 官方 HTTPS 镜像](https://linuxmint.com/mirrors.php)与 Ubuntu 官方 HTTPS 源，保留原发行套件、组件和签名验证。SSH 首次准备与其他 CI 路径采用相同的 5 秒、15 秒有界重试。
+显式跨版本更新使用 Cinnamon 官方 ISO。安装器在没有网卡的一次性 VM 中从 ISO 安装系统，从磁盘启动后接入虚拟网卡。SSH 首次准备采用 5 秒、15 秒有界重试。
 
 ```bash
 gh workflow run linuxmint-compatibility.yml --ref main -f run_id=<成功的CI编号>
 ```
 
-常规工作流安装候选 DEB，运行系统代理与 TUN 检查，验证 DNS 和退出恢复。`linux-package-report-linuxmint-<版本>-x64` 包含来宾及安装诊断。两个目标都成功后生成 `linuxmint-compatibility-attempt-<次数>`，绑定提交、CI 附件身份和两份 ISO 的摘要。报告与回执保留 3 天。
+常规工作流安装候选 DEB，运行系统代理与 TUN 检查，验证 DNS 和退出恢复。`linux-package-report-linuxmint-<版本>-x64` 记录容器、runner 内核与安装诊断。两个目标都成功后生成 `linuxmint-compatibility-attempt-<次数>`，绑定提交、CI 附件身份、基础镜像和 Mint 软件包摘要。显式跨版本更新的回执绑定两份 ISO。报告与回执保留 3 天。
 
 ## 首轮完整验收
 

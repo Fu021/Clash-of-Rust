@@ -24,9 +24,12 @@ def authorize(home):
     result = {}
     try:
         def active_session():
-            session = output(['loginctl', 'show-user', str(os.getuid()), '-p', 'Display', '--value'])
-            if session and output(['loginctl', 'show-session', session, '-p', 'Active', '--value']) == 'yes':
-                return session
+            try:
+                session = output(['loginctl', 'show-user', str(os.getuid()), '-p', 'Display', '--value'])
+                if session and output(['loginctl', 'show-session', session, '-p', 'Active', '--value']) == 'yes':
+                    return session
+            except subprocess.TimeoutExpired:
+                return None
             return None
 
         result['session'] = wait_for('The COSMIC user did not reach an active display login',

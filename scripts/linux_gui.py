@@ -60,8 +60,8 @@ def wait_for(description, probe, timeout=45):
     raise TimeoutError(description)
 
 
-def output(command, **kwargs):
-    return subprocess.check_output(list(map(str, command)), text=True, timeout=15, **kwargs).strip()
+def output(command, *, timeout=15, **kwargs):
+    return subprocess.check_output(list(map(str, command)), text=True, timeout=timeout, **kwargs).strip()
 
 
 def dbus(destination, path, method, *arguments):
@@ -421,13 +421,16 @@ def wayland_sockets(runtime):
             if (path.name.startswith('wayland-') or path.name == 'cor-wayland') and path.is_socket()}
 
 
+def tcg_guest():
+    return os.environ.get('COR_LINUX_VM_ACCELERATION') == 'tcg'
+
+
 def arm_tcg_guest():
-    return (os.environ.get('COR_LINUX_VM_ACCELERATION') == 'tcg'
-            and platform.machine().lower() in ('aarch64', 'arm64'))
+    return tcg_guest() and platform.machine().lower() in ('aarch64', 'arm64')
 
 
 def desktop_update_timeout():
-    return 2700 if arm_tcg_guest() else DESKTOP_UPDATE_TIMEOUT
+    return 2700 if tcg_guest() else DESKTOP_UPDATE_TIMEOUT
 
 
 def timeout_evidence(error):
@@ -514,8 +517,9 @@ def gui(backend, report, evaluate_window=evaluate, *, force_wayland=False, verif
                                  if _renderer(path, owner.pid)]
                 windows = select_wayland_windows(windows, renderer_pids)
             return windows
+        window_timeout = 120 if inspect_window and arm_tcg_guest() else 45
         try:
-            windows = wait_for_usable_window(backend, visible)
+            windows = wait_for_usable_window(backend, visible, timeout=window_timeout)
         except RuntimeError as error:
             if backend == 'wayland':
                 raise RuntimeError(f'{error}; compositor windows: {observed}; '
@@ -581,7 +585,7 @@ def gui(backend, report, evaluate_window=evaluate, *, force_wayland=False, verif
                                    f'the GUI owner: {owner.returncode}')
             wait_for(f'{backend} tray item {item} did not accept Activate', lambda: activate_tray(item),
                      timeout=15)
-            windows = wait_for_usable_window(backend, visible)
+            windows = wait_for_usable_window(backend, visible, timeout=window_timeout)
             after = cli('status')
             if (core_processes() != processes or not after.get('running')
                     or after.get('owner') != 'gui' or after.get('mode') != before.get('mode')):
@@ -706,7 +710,7 @@ def recognize_update_screen(image, *, region=None):
         'if len(sys.argv) > 2: image = image.crop(tuple(map(int, sys.argv[2:])))\n'
         'image.resize((image.width*2, image.height*2)).save(sys.stdout.buffer, format="PNG")\n'
     )
-    slow = arm_tcg_guest()
+    slow = tcg_guest()
     enlarged = subprocess.check_output(
         ['/usr/bin/python3', '-c', code, image, *map(str, region or ())], timeout=30 if slow else 10)
     result = subprocess.run(['tesseract', 'stdin', 'stdout', '--psm', '11', '-l', 'chi_sim+eng', 'tsv'],
@@ -753,7 +757,7 @@ for top, bottom in bands(mask.getprojection()[1]):
         buttons.append((filename, (left, top, right - left, bottom - top)))
 print(json.dumps(buttons))
 """
-    slow = arm_tcg_guest()
+    slow = tcg_guest()
     buttons = json.loads(subprocess.check_output(
         ['/usr/bin/python3', '-c', prepare, image, UPDATE_FIXTURE_ACCENT[1]], timeout=30 if slow else 10))
     wanted = set(map(normalize_screen_text, labels))
@@ -797,7 +801,7 @@ def redact_update_image(size, destination, words):
         'result.save(sys.argv[3])\n'
     )
     run(['/usr/bin/python3', '-c', code, *size, destination], input=json.dumps(words),
-        text=True, timeout=10)
+        text=True, timeout=60 if tcg_guest() else 10)
 
 
 class UpdateNavigation:
@@ -891,7 +895,7 @@ class UpdateNavigation:
     def locate(self, labels, *, region=None, contains=False):
         primary = not contains and labels in (UPDATE_LABELS['download'], UPDATE_LABELS['continue'])
         capture = (self.capture(primary_labels=labels) if primary else
-                   self.capture(region=region) if region and arm_tcg_guest() else self.capture())
+                   self.capture(region=region) if region and tcg_guest() else self.capture())
         if not capture:
             return None
         lines = self.lines
@@ -905,7 +909,7 @@ class UpdateNavigation:
     def wait(self, step, labels, *, click=False, region=None, timeout=45, evidence=None, scroll=False):
         self.step = step
         scrolls = 0
-        if arm_tcg_guest():
+        if tcg_guest():
             timeout = max(timeout, 180)
 
         def locate():
@@ -942,7 +946,7 @@ class UpdateNavigation:
         width = self.geometry[2]
         home = self.locate(UPDATE_LABELS['home'], region=(0, 104, 216, 171))
         self.input('return-home', home or (30, 124))
-        header = (76, 48, 311, 92) if arm_tcg_guest() else (60, 44, width, 102)
+        header = (76, 48, 311, 92) if tcg_guest() else (60, 44, width, 102)
         self.wait('home-page', UPDATE_LABELS['home'], region=header)
 
     def check(self):

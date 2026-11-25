@@ -47,7 +47,8 @@ def privileged(*arguments, timeout=900):
          *manager(), *arguments], timeout=timeout+45)
 
 
-def refresh_tumbleweed():
+def refresh_tumbleweed(package_command=None):
+    package_command = package_command or privileged
     snapshot = platform.freedesktop_os_release()['VERSION_ID']
     datetime.strptime(snapshot, '%Y%m%d')
     alias = 'cor-tumbleweed-snapshot'
@@ -67,12 +68,32 @@ def refresh_tumbleweed():
     else:
         if published == digest:
             source = content
-    privileged('modifyrepo', '--all', '--disable', timeout=60)
-    privileged('addrepo', '--check', '--gpgcheck', '--no-refresh', source, alias, timeout=90)
-    privileged('refresh', alias, timeout=300)
+    package_command('modifyrepo', '--all', '--disable', timeout=60)
+    package_command('addrepo', '--check', '--gpgcheck', '--no-refresh', source, alias, timeout=90)
+    package_command('refresh', alias, timeout=300)
     cached = Path('/var/cache/zypp/raw')/alias/'repodata/repomd.xml'
     if not cached.is_file() or sha256(cached) != digest:
         raise RuntimeError(f'Tumbleweed {snapshot} {machine} repository metadata does not match the pinned SHA256')
+
+
+def refresh_tumbleweed_container():
+    if (os.geteuid() != 0 or os.environ.get('GITHUB_ACTIONS') != 'true'
+            or os.environ.get('COR_LINUX_COMPAT_CONTAINER') != 'true'
+            or platform.freedesktop_os_release().get('ID') != 'opensuse-tumbleweed'):
+        raise RuntimeError('Tumbleweed bootstrap requires a disposable Actions container')
+
+    def zypper(*arguments, timeout):
+        run(['zypper', '--non-interactive', *arguments], timeout=timeout)
+
+    refresh_tumbleweed(zypper)
+
+
+def arch_snapshot_mirrorlist():
+    snapshot = datetime.strptime(TARGETS['arch'][0].release.split('.')[0], '%Y%m%d')
+    return ''.join(
+        f'Server = {archive}/repos/{snapshot:%Y/%m/%d}/$repo/os/$arch\n'
+        for archive in ('https://archive.archlinux.org', ARCH_ARCHIVE_MIRROR)
+    )
 
 
 def refresh():
@@ -84,15 +105,8 @@ def refresh():
     elif distro == 'opensuse-leap':
         privileged('refresh', timeout=300)
     else:
-        mirrorlist = '/etc/pacman.d/mirrorlist'
-        snapshot = datetime.strptime(TARGETS['arch'][0].release.split('.')[0], '%Y%m%d')
-        archives = ('https://archive.archlinux.org', ARCH_ARCHIVE_MIRROR)
-        servers = ''.join(
-            f'Server = {archive}/repos/{snapshot:%Y/%m/%d}/$repo/os/$arch\n'
-            for archive in archives
-        )
-        run(['sudo', 'tee', mirrorlist],
-            input=servers, text=True, stdout=subprocess.DEVNULL)
+        run(['sudo', 'tee', '/etc/pacman.d/mirrorlist'],
+            input=arch_snapshot_mirrorlist(), text=True, stdout=subprocess.DEVNULL)
         privileged('-Syy')
         arch_transaction('-Su')
 

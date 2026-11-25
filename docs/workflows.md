@@ -8,8 +8,8 @@
 | [Android Compatibility](workflows/android-compatibility.md) | 手动；复用成功 CI 的 x64 APK，Android 8.0～16 基础代理/TUN，截图与诊断可选 | 状态和日志保留 7 天，发布回执保留 3 天 |
 | [Ubuntu Compatibility](workflows/ubuntu-compatibility.md) | 手动；四个 LTS 均覆盖 x64 和 ARM64，验收同提交 DEB 的安装、系统代理和 TUN | 小型报告及发布回执保留 3 天 |
 | [Debian Compatibility](workflows/debian-compatibility.md) | 手动；Debian 12、13 的 x64 和 ARM64 容器安装同提交 DEB，验证系统代理与 TUN | 小型报告及兼容回执保留 3 天 |
-| [Linux Mint Compatibility](workflows/linuxmint-compatibility.md) | 手动；Linux Mint 21.3 和 22.3 Cinnamon x64 的官方 ISO VM，安装同提交 DEB 并验证系统代理与 TUN | 小型报告及兼容回执保留 3 天 |
-| [Pop!_OS、Zorin OS、Fedora、openSUSE、Arch Linux Compatibility](workflows/linux-expansion.md) | 每个发行版独立手动入口，复用同提交成功 CI，在固定版本的 x64 来宾安装原生包并验证系统代理与 TUN | 小型报告及兼容回执保留 3 天 |
+| [Linux Mint Compatibility](workflows/linuxmint-compatibility.md) | 手动；Linux Mint 21.3 和 22.3 x64 精简用户态容器，安装同提交 DEB 并验证系统代理与 TUN | 小型报告及兼容回执保留 3 天 |
+| [Pop!_OS、Zorin OS、Fedora、openSUSE、Arch Linux Compatibility](workflows/linux-expansion.md) | 每个发行版独立手动入口，用同提交成功 CI 的候选包在矩阵所列架构上验证安装、系统代理及 TUN | 小型报告及兼容回执保留 3 天 |
 
 普通 CI 共 13 个必需 job（共享输入 1、桌面 6、Android Maven 准备 1、Android ABI 3、网站验证 1、缓存预算 1）。网站未变化时，网站任务只验证本轮范围。发布所需矩阵见[兼容性发布门禁](workflows/release.md#兼容性发布门禁)。Publish Release 的 `check_only` 执行解析和最终核验，公开发布另执行三个 Android 签名 job。Memory Benchmark 包含构建与 API 基准、按场景分片采样、汇总及缓存预算。依赖维护模式不作为发布来源。
 
