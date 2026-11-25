@@ -169,7 +169,9 @@ def verify_cli_path(app, env, home, process):
     if status['running'] is not True:
         raise RuntimeError('The installed cor cannot see the running desktop backend')
     report = json.loads(login_shell('cor diagnose --offline --json'))['data']
-    if report['resources'] != str(app/'Contents/Resources/resources'):
+    resources = report['resources'].get('Ok')
+    expected_resources = (app/'Contents/Resources/resources').resolve(strict=True)
+    if resources is None or Path(resources).resolve(strict=True) != expected_resources:
         raise RuntimeError('The installed cor cannot find bundled resources through PATH')
     return {'shell': 'zsh', 'bundled_resources': True, 'desktop_backend': True}
 
