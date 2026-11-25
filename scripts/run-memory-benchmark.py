@@ -114,7 +114,7 @@ def client_fixture(data, workload, rule_overrides=None, pagination=None):
         mixed.bind(('127.0.0.1', 0))
         controller_port, mixed_port = controller.getsockname()[1], mixed.getsockname()[1]
     settings = {'controller_port': controller_port, 'mixed_port': mixed_port,
-                'secret': 'memory-benchmark', 'dark': True, 'delay_interval_minutes': 0,
+                'secret': 'memory-benchmark', 'dark': True, 'language': 'zh-CN', 'delay_interval_minutes': 0,
                 'update_check_interval_minutes': 0,
                 'active_profile': profile_id, 'run_mode': 'rule', 'proxy_mode': 'off'}
     if rule_overrides is not None:
@@ -331,7 +331,9 @@ def measure_closed(benchmark, pid, name, output, seconds, env, identity, mode='a
 
 def owned_window(window, root_pid, env):
     try:
-        pid = int(subprocess.check_output(['xdotool','getwindowpid',window],env=env,text=True).strip())
+        pid = int(subprocess.check_output(
+            ['xdotool', 'getwindowpid', window], env=env, text=True, stderr=subprocess.PIPE
+        ).strip())
         seen = set()
         while pid > 1 and pid not in seen:
             if pid == root_pid: return True
@@ -398,24 +400,33 @@ def pagination_navigation(window, env, click, proxies, reset_scroll=False):
 
 def gui_scenes(executable, benchmark, output, seconds, modern_layout=False, slint_layout=False,
                rule_overrides=None, prefix='', workload='light', tray=None, expect_destroy=False,
-               pagination=None):
-    with tempfile.TemporaryDirectory(prefix='memory-gui-') as directory, (output/(prefix+'gui.log')).open('x') as log:
+               pagination=None, background_only=False):
+    log_name = prefix + ('tray-idle.log' if background_only else 'gui.log')
+    with tempfile.TemporaryDirectory(prefix='memory-gui-') as directory, (output/log_name).open('x') as log:
         data = Path(directory)
         env, controller_port = client_fixture(data, workload, rule_overrides, pagination)
-        app = subprocess.Popen([str(executable)], env=env, stdout=log, stderr=log, start_new_session=True)
+        command = [str(executable), *(['--background'] if background_only else [])]
+        app = subprocess.Popen(command, env=env, stdout=log, stderr=log, start_new_session=True)
+
+        def windows_of_app(*options):
+            found = subprocess.run(['xdotool', 'search', *options, '--name', '^Clash of Rust'],
+                                   env=env, capture_output=True, text=True)
+            if found.returncode not in (0, 1):
+                raise RuntimeError('Could not inspect window visibility')
+            return [item for item in found.stdout.split() if owned_window(item, app.pid, env)]
+
         try:
-            for _ in range(90):
-                found = subprocess.run(['xdotool', 'search', '--name', '^Clash of Rust'],
-                                       env=env, capture_output=True, text=True)
-                windows = [w for w in found.stdout.split() if owned_window(w, app.pid, env)] if found.returncode == 0 else []
-                if windows:
-                    window = windows[0]
-                    break
-                if app.poll() is not None:
-                    raise RuntimeError('GUI exited; see gui.log')
-                time.sleep(1)
-            else:
-                raise RuntimeError('GUI window did not appear')
+            if not background_only:
+                for _ in range(90):
+                    windows = windows_of_app()
+                    if windows:
+                        window = windows[0]
+                        break
+                    if app.poll() is not None:
+                        raise RuntimeError('GUI exited; see gui.log')
+                    time.sleep(1)
+                else:
+                    raise RuntimeError('GUI window did not appear')
             opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
             for _ in range(90):
                 try:
@@ -441,14 +452,25 @@ def gui_scenes(executable, benchmark, output, seconds, modern_layout=False, slin
                 def visible_windows():
                     if app.poll() is not None:
                         raise RuntimeError('Close exited the GUI instead of retaining the tray')
-                    result = subprocess.run(['xdotool', 'search', '--onlyvisible',
-                                             '--name', '^Clash of Rust'], env=env, capture_output=True, text=True)
-                    if result.returncode not in (0, 1):
-                        raise RuntimeError('Could not inspect window visibility')
-                    return [item for item in result.stdout.split() if owned_window(item, app.pid, env)] if result.returncode == 0 else []
+                    return windows_of_app('--onlyvisible')
 
                 def hidden():
                     return not visible_windows() and core_running(controller_port)
+
+                if background_only:
+                    if not hidden() or renderer_running(app.pid):
+                        raise RuntimeError('Direct background launch opened a GUI')
+                    name = prefix+'tray-idle'
+                    rows = measure_process(benchmark, app.pid, name, output,
+                                           memory_shards.scene_seconds(name, seconds), env, settle_seconds=0)
+                    identity = owner_pair(rows, 'gui', closed=True)
+                    if not hidden() or not tray.registered(app.pid):
+                        raise RuntimeError('Direct background launch lost the tray or core')
+                    write_json(output/(name+'-proof.json'), {
+                        'started_with_background': True, 'tray_registered': True,
+                        'owner_and_core': identity,
+                    })
+                    return
 
                 destroyed = []
                 def close():
@@ -568,7 +590,8 @@ def gui_scenes(executable, benchmark, output, seconds, modern_layout=False, slin
                 app.wait()
 
 
-def headless_scene(console, resources, benchmark, output, seconds, workload, rule_overrides=None, prefix='background-', tui=False, native_settings=False, tui_catalog=False):
+def headless_scene(console, resources, benchmark, output, seconds, workload, rule_overrides=None,
+                   prefix='background-', tui=False, native_settings=False, tui_catalog=False):
     with tempfile.TemporaryDirectory(prefix='memory-cli-') as directory, (output/(prefix+'cor.log')).open('x') as log:
         data = Path(directory)
         env, port = client_fixture(data, workload, rule_overrides)
@@ -586,7 +609,10 @@ def headless_scene(console, resources, benchmark, output, seconds, workload, rul
             pid = endpoint['pid']
             identity = Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()[19]
             wait_until(lambda: core_running(port), 'headless core readiness')
-            baseline = measure_process(benchmark, pid, prefix+'headless', output, seconds, env, mode='daemon')
+            name = prefix+'headless'
+            baseline = measure_process(benchmark, pid, name, output,
+                                       memory_shards.scene_seconds(name, seconds), env,
+                                       mode='daemon', settle_seconds=0)
             pair = owner_pair(baseline, 'daemon', closed=True)
             if tui:
                 from cli_tui import Session
@@ -768,8 +794,9 @@ def summarize(output, metadata):
                 core_gap = pair['gap_to_cli']['core']['pss_bytes']['bytes'] / 1048576
                 lines.append(f'| {prefix}{name} | {change:+.2f} | {client_gap:+.2f} | {core_gap:+.2f} |')
         lines += ['', 'Full RSS, PSS and USS differences and percentages are in `closed-residency.json`. '
-                  'The JSON records samples near 0, 10, 30 and 60 seconds from the start of closed sampling '
-                  'and includes final anonymous/heap and executable mappings. GUI and pure CLI run on separate shards.', '']
+                  'The JSON matches samples near 0, 10, 30 and 60 seconds in each phase to a pure CLI '
+                  'baseline measured on the same runner. Where supported it also compares closed GUI '
+                  'to direct background desktop startup. Final mappings are recorded separately.', '']
     pages = memory_shards.pagination_cases(metadata.get('capabilities', {}))
     if pages:
         pagination = {page: pagination_comparison(output, 'pagination-' + page,
@@ -871,6 +898,8 @@ def prepare(args, directory, output):
                         overrides='pub rule_overrides:' in settings_source.read_text(encoding='utf-8'),
                         destroy=slint_layout and any(marker in (desktop/'src/application/bindings.rs').read_text()
                                                      for marker in ('fn retire_window(', 'struct Renderer')))
+    capabilities['desktop_background'] = slint_layout and '--background' in (
+        desktop/'src/application/mod.rs').read_text(encoding='utf-8')
     pages = source/'crates/client-ui/ui/pages'
     for kind, file, marker in (('group_pagination', 'proxies.slint', 'Intent.group-pagination'),
                                ('profile_pagination', 'subscriptions.slint', 'Intent.profile-pagination')):
@@ -925,7 +954,13 @@ def measure_shard(directory, output, shard, digest):
         if capabilities['slint']:
             tray_output = output/'tray-hosts'/shard
             tray_output.mkdir(parents=True)
+            if capabilities['cli']:
+                headless_scene(bundle/'cor', bundle/'resources', benchmark, output, seconds,
+                               workload, overrides, background+'gui-')
             with TrayHost(tray_output) as tray:
+                if capabilities.get('desktop_background'):
+                    gui_scenes(bundle/'clash-of-rust', benchmark, output, seconds, workload=workload,
+                               rule_overrides=overrides, prefix=background, tray=tray, background_only=True)
                 gui_scenes(bundle/'clash-of-rust', benchmark, output, seconds, capabilities['modern'],
                            True, overrides, background, workload, tray, capabilities['destroy'])
     write_json(output/'receipt.json', dict(shard=shard, digest=digest, scenes=manifest['shards'][shard],

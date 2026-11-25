@@ -287,8 +287,15 @@ pub(super) async fn execute(
         Command::EditProfile { id, name, source } => engine.edit_profile(&id, &name, &source)?,
         Command::Activate { id } => engine.activate(id).await?,
         Command::DeleteProfile { id } => engine.delete_profile(&id).await?,
-        Command::RuleDocument { id } => {
-            return json_payload(engine.rule_document(&id)?);
+        Command::RuleDocument { id, summary_only } => {
+            if summary_only {
+                let (status, source_bytes) = engine.rule_shortcuts(&id)?;
+                return Ok(Payload::RuleShortcutStatus {
+                    status,
+                    source_bytes,
+                });
+            }
+            return Ok(Payload::RuleDocument(Box::new(engine.rule_document(&id)?)));
         }
         Command::SaveRules {
             id,

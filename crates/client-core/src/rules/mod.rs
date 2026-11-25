@@ -130,15 +130,37 @@ pub struct Document {
     pub policies: Vec<String>,
     pub included: [bool; 5],
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShortcutStatus {
+    pub profile_id: String,
+    pub builtin: bool,
+    pub included: [bool; 5],
+}
+
+impl ShortcutStatus {
+    pub fn from_raw(id: &str, builtin: bool, raw: &str) -> Result<Self> {
+        let map = parse_profile(raw)?;
+        let mut included = [false; 5];
+        for rule in source_rules(&map)? {
+            mark_shortcuts(&mut included, rule?);
+        }
+        Ok(Self {
+            profile_id: id.to_owned(),
+            builtin,
+            included,
+        })
+    }
+}
+
 impl Document {
     pub fn from_raw(id: &str, builtin: bool, raw: &str) -> Result<Self> {
         let map = parse_profile(raw)?;
         let original = original_rows(&map)?;
-        let included = std::array::from_fn(|i| {
-            original
-                .iter()
-                .any(|row| same_shortcut(&row.raw, SUBSCRIPTION_RULES[i]))
-        });
+        let mut included = [false; 5];
+        for row in &original {
+            mark_shortcuts(&mut included, &row.raw);
+        }
         let mut policies: BTreeSet<String> = ["DIRECT", "REJECT", "REJECT-DROP", "PASS"]
             .into_iter()
             .map(str::to_owned)
@@ -160,6 +182,14 @@ impl Document {
             included,
         })
     }
+    pub fn shortcut_status(&self) -> ShortcutStatus {
+        ShortcutStatus {
+            profile_id: self.profile_id.clone(),
+            builtin: self.builtin,
+            included: self.included,
+        }
+    }
+
     pub fn rows(&self, draft: &ProfileRules) -> (Vec<Row>, Vec<String>) {
         let (rows, mut warnings) = compose(&self.original, draft, self.builtin);
         let mut missing = BTreeSet::new();
@@ -296,19 +326,30 @@ fn parse_parts(raw: &str, draft: bool) -> Result<Parts<'_>> {
         no_resolve,
     })
 }
-fn original_rows(map: &Mapping) -> Result<Vec<Row>> {
-    let previous = match map.get(Value::from("rules")) {
-        None | Some(Value::Null) => return Ok(Vec::new()),
+fn source_rules(map: &Mapping) -> Result<impl Iterator<Item = Result<&str>>> {
+    let rules: &[Value] = match map.get(Value::from("rules")) {
+        None | Some(Value::Null) => &[],
         Some(Value::Sequence(rules)) => rules,
         _ => bail!("订阅 rules 必须是规则列表"),
     };
-    let mut occurrences = BTreeMap::<String, usize>::new();
-    previous
+    Ok(rules
         .iter()
-        .map(|value| {
-            let raw = value.as_str().context("订阅规则必须是字符串")?;
+        .map(|rule| rule.as_str().context("订阅规则必须是字符串")))
+}
+
+fn mark_shortcuts(included: &mut [bool; 5], rule: &str) {
+    for (included, shortcut) in included.iter_mut().zip(SUBSCRIPTION_RULES) {
+        *included = *included || same_shortcut(rule, shortcut);
+    }
+}
+
+fn original_rows(map: &Mapping) -> Result<Vec<Row>> {
+    let mut occurrences = BTreeMap::<String, usize>::new();
+    source_rules(map)?
+        .map(|rule| {
+            let raw = rule?;
             let digest = Sha256::digest(raw.trim().as_bytes());
-            let hash: String = digest[..16].iter().map(|b| format!("{b:02x}")).collect();
+            let hash = crate::file_hash::hex(&digest[..16]);
             let occurrence = occurrences.entry(hash.clone()).or_default();
             let id = format!("s:{hash}:{occurrence}");
             *occurrence += 1;
@@ -503,6 +544,27 @@ pub fn apply(map: &mut Mapping, draft: &ProfileRules, builtin: bool) -> Result<(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shortcut_status_matches_full_document_and_checks_every_rule() {
+        let raw =
+            "proxies: []\nrules:\n  - ' geosite , CATEGORY-ADS-ALL , reject '\n  - MATCH,DIRECT\n";
+        let full = Document::from_raw("fixture", false, raw).unwrap();
+        let summary = ShortcutStatus::from_raw("fixture", false, raw).unwrap();
+        assert_eq!(summary.profile_id, full.profile_id);
+        assert_eq!(summary.builtin, full.builtin);
+        assert_eq!(summary.included, full.included);
+        assert!(summary.included[0]);
+        let malformed = format!("{raw}  - 42\n");
+        assert_eq!(
+            ShortcutStatus::from_raw("fixture", false, &malformed)
+                .unwrap_err()
+                .to_string(),
+            Document::from_raw("fixture", false, &malformed)
+                .unwrap_err()
+                .to_string()
+        );
+    }
 
     #[test]
     fn warnings_translate_at_presentation_and_preserve_unknown_text() {

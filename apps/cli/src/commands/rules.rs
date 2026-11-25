@@ -1,7 +1,7 @@
 use super::*;
 use clash_client_runtime::{
     control::RuleChange,
-    rule_manager::{Document, ProfileRules, warning_in},
+    rule_manager::{Document, ProfileRules, ShortcutStatus, warning_in},
 };
 const SHORTCUTS: [&str; 5] = ["ads", "private-domain", "private-ip", "cn-domain", "cn-ip"];
 
@@ -10,10 +10,14 @@ pub(super) async fn execute(args: &Args) -> Result<()> {
     let p = super::profile(&meta, args.get("profile"), args.language())?;
     let id = p.id.clone();
     if args.path == "rule list" || (args.path == "rule shortcut" && args.positional.len() < 2) {
-        let doc: Document =
-            backend::request(args, Command::RuleDocument { id: id.clone() }).await?;
-        let draft = ProfileRules::for_profile(&meta.settings, &id, doc.builtin);
+        let summary_only = args.path == "rule shortcut";
+        let command = Command::RuleDocument {
+            id: id.clone(),
+            summary_only,
+        };
         if args.path == "rule shortcut" {
+            let status: ShortcutStatus = backend::request(args, command).await?;
+            let draft = ProfileRules::for_profile(&meta.settings, &id, status.builtin);
             let selected = args.positional.first();
             if let Some(name) = selected {
                 ensure!(
@@ -24,8 +28,10 @@ pub(super) async fn execute(args: &Args) -> Result<()> {
                 );
             }
             return output::emit(args,json!(SHORTCUTS.iter().enumerate().filter(|(_,name)|selected.is_none_or(|v|v==*name))
-                .map(|(i,name)|json!({"name":name,"enabled":draft.enabled[i],"already_in_subscription":doc.included[i],"rule":clash_client_core::config::SUBSCRIPTION_RULES[i]})).collect::<Vec<_>>()));
+                .map(|(i,name)|json!({"name":name,"enabled":draft.enabled[i],"already_in_subscription":status.included[i],"rule":clash_client_core::config::SUBSCRIPTION_RULES[i]})).collect::<Vec<_>>()));
         }
+        let doc: Document = backend::request(args, command).await?;
+        let draft = ProfileRules::for_profile(&meta.settings, &id, doc.builtin);
         let (rows, warnings) = doc.rows(&draft);
         let has_warnings = !warnings.is_empty();
         for warning in warnings {

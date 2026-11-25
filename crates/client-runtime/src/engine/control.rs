@@ -60,6 +60,7 @@ impl Engine {
             last_totals: None,
             version: meta.version,
             node_root: Mutex::new(None),
+            rule_shortcut_cache: None,
             protection_guard: None,
             _instance_lock: None,
             remote: Some(remote),

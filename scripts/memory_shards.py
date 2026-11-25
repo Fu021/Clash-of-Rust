@@ -25,7 +25,7 @@ def compatible_runner(prepared, measured):
 
 
 def scene_seconds(scene, seconds):
-    if scene.endswith(('tray-hidden', 'tray-search-hidden', 'tray-after-cycles-hidden',
+    if scene.endswith(('headless', 'tray-idle', 'tray-hidden', 'tray-search-hidden', 'tray-after-cycles-hidden',
                        'tui-closed', 'tui-reclosed', 'tui-after-cycles-closed')):
         return max(seconds, COOLDOWN_SECONDS)
     return seconds
@@ -48,6 +48,10 @@ def plan(capabilities):
         background = prefix + 'background-'
         gui = [prefix + name for name in VISIBLE]
         if capabilities['slint']:
+            if capabilities['cli']:
+                gui.append(background + 'gui-headless')
+            if capabilities.get('desktop_background'):
+                gui.append(background + 'tray-idle')
             gui.extend(background + name for name in TRAY)
         shards[variant + '-gui'] = gui
         if capabilities['slint'] and capabilities['cli']:
@@ -145,7 +149,8 @@ def combine(manifest, digest, directory, output, read_scene):
         identity = None
         pagination_pairs = {}
         for scene in scenes:
-            role = 'daemon' if shard.endswith('-cli') else 'gui'
+            separate_baseline = scene.endswith(('gui-headless', 'tray-idle'))
+            role = 'daemon' if shard.endswith('-cli') or scene.endswith('gui-headless') else 'gui'
             seconds = scene_seconds(scene, metadata['gui_sample_seconds'])
             rows = read_scene(folder / (scene + '.jsonl'), seconds, role)
             samples = json.loads((folder / (scene + '-mapping-peaks.json')).read_text())
@@ -161,8 +166,18 @@ def combine(manifest, digest, directory, output, read_scene):
                                      json.loads((folder / (scene + '-mappings.json')).read_text())}:
                 raise ValueError(f'Incomplete final process mappings in {scene}')
             if 'background-' in scene:
-                closed = scene.endswith(('headless', 'hidden', 'closed'))
-                identity = owner_pair(rows, role, identity, closed)
+                closed = scene.endswith(('idle', 'headless', 'hidden', 'closed'))
+                measured_identity = owner_pair(rows, role, None if separate_baseline else identity, closed)
+                if separate_baseline:
+                    proof = json.loads((folder / (scene + '-proof.json')).read_text())
+                    if proof['owner_and_core'] != [list(part) for part in measured_identity]:
+                        raise ValueError(f'Baseline proof does not match sampled processes in {scene}')
+                    if role == 'gui' and not (proof['started_with_background'] and proof['tray_registered']):
+                        raise ValueError(f'Missing direct background tray proof in {scene}')
+                    if role == 'daemon' and (proof['owner'] != 'daemon' or proof['display'] or proof['gui_session']):
+                        raise ValueError(f'Missing headless proof in {scene}')
+                else:
+                    identity = measured_identity
                 if 'tui-' in scene and not closed:
                     owner_pair(rows, 'tui')
                 target = 'terminal_scenes' if 'tui-' in scene else 'background_scenes'

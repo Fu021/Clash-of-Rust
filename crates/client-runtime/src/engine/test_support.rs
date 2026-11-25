@@ -35,6 +35,7 @@ pub(crate) fn fixture(store: Store) -> Engine {
         last_totals: None,
         version: String::new(),
         node_root: Mutex::new(None),
+        rule_shortcut_cache: None,
         protection_guard: None,
         _instance_lock: None,
         remote: None,

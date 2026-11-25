@@ -54,16 +54,27 @@ def difference(measured, baseline):
     return values
 
 
-def checkpoints(samples, client, baseline):
+def nearest_sample(samples, seconds):
+    target = seconds * 1000
+    row = min(samples, key=lambda sample: abs(sample['elapsed_ms'] - target))
+    if abs(row['elapsed_ms'] - target) > 1000:
+        raise ValueError(f'Missing memory sample at {seconds} seconds')
+    return row
+
+
+def checkpoints(samples, client, cli_samples, tray_samples=None):
     result = {}
     for seconds in (0, 10, 30, 60):
-        target = seconds * 1000
-        row = min(samples, key=lambda sample: abs(sample['elapsed_ms'] - target))
-        if abs(row['elapsed_ms'] - target) > 1000:
-            raise ValueError(f'Missing closed memory sample at {seconds} seconds')
+        row = nearest_sample(samples, seconds)
+        cli = nearest_sample(cli_samples, seconds)
         observed = readings(row, client)
-        result[str(seconds)] = {'elapsed_ms': row['elapsed_ms'], 'memory': observed,
-                                'gap_to_cli': difference(observed, baseline)}
+        point = {'elapsed_ms': row['elapsed_ms'], 'memory': observed, 'cli_elapsed_ms': cli['elapsed_ms'],
+                 'gap_to_cli': difference(observed, readings(cli, 'daemon'))}
+        if tray_samples is not None:
+            tray = nearest_sample(tray_samples, seconds)
+            point['tray_elapsed_ms'] = tray['elapsed_ms']
+            point['gap_to_idle_tray'] = difference(observed, readings(tray, 'gui'))
+        result[str(seconds)] = point
     return result
 
 
@@ -86,9 +97,11 @@ def mapping_readings(output, name, client):
 def comparisons(output, prefixes, read_scene):
     result = {}
     for prefix in prefixes:
-        baseline_name = prefix + 'headless'
-        baseline = readings(read_scene(output / (baseline_name + '.jsonl'))[-1], 'daemon')
-        baseline_mapping = mapping_readings(output, baseline_name, 'daemon')
+        baseline_names = {'daemon': prefix + 'headless', 'gui': prefix + 'gui-headless'}
+        baselines = {role: read_scene(output / (name + '.jsonl')) for role, name in baseline_names.items()}
+        tray_name = prefix + 'tray-idle'
+        tray_path = output / (tray_name + '.jsonl')
+        tray_samples = read_scene(tray_path) if tray_path.is_file() else None
         cases = [('tray-open', 'tray-hidden', 'gui'), ('tray-search', 'tray-search-hidden', 'gui'),
                  ('tray-after-cycles', 'tray-after-cycles-hidden', 'gui')]
         if (output / (prefix + 'tui-closed.jsonl')).is_file():
@@ -100,23 +113,33 @@ def comparisons(output, prefixes, read_scene):
                 cases.append(('tui-reopened', 'tui-reclosed', 'daemon'))
             cases.append(('tui-after-cycles', 'tui-after-cycles-closed', 'daemon'))
         proof = json.loads((output / (prefix + 'proof.json')).read_text())
-        result[prefix] = {'baseline': baseline, 'baseline_mapping': baseline_mapping, 'pairs': {},
-                          'median_reopen_ms': median(proof['relaunch_to_visible_ms'])}
+        result[prefix] = {'baseline': readings(baselines['daemon'][-1], 'daemon'),
+                          'baseline_mapping': mapping_readings(output, baseline_names['daemon'], 'daemon'),
+                          'pairs': {}, 'median_reopen_ms': median(proof['relaunch_to_visible_ms'])}
         for before, after, client in cases:
             visible = readings(read_scene(output / (prefix + before + '.jsonl'))[-1], client)
             after_rows = read_scene(output / (prefix + after + '.jsonl'))
             closed = readings(after_rows[-1], client)
             closed_mapping = mapping_readings(output, prefix + after, client)
             visible_mapping = mapping_readings(output, prefix + before, client)
-            result[prefix]['pairs'][after] = {
+            baseline_name = baseline_names[client]
+            baseline_mapping = mapping_readings(output, baseline_name, 'daemon')
+            stages = checkpoints(after_rows, client, baselines[client], tray_samples if client == 'gui' else None)
+            last_cli = nearest_sample(baselines[client], after_rows[-1]['elapsed_ms'] / 1000)
+            pair = {
                 'before': before, 'after': after, 'visible': visible, 'closed': closed,
                 'change_on_close': difference(closed, visible),
-                'gap_to_cli': difference(closed, baseline),
-                'checkpoints': checkpoints(after_rows, client, baseline),
+                'cli_baseline_scene': baseline_name,
+                'gap_to_cli': difference(closed, readings(last_cli, 'daemon')),
+                'checkpoints': stages,
                 'closed_mapping': closed_mapping,
                 'mapping_change_on_close': difference(closed_mapping, visible_mapping),
                 'mapping_gap_to_cli': difference(closed_mapping, baseline_mapping),
             }
+            if client == 'gui' and tray_samples is not None:
+                pair['idle_tray_scene'] = tray_name
+                pair['mapping_gap_to_idle_tray'] = difference(closed_mapping, mapping_readings(output, tray_name, 'gui'))
+            result[prefix]['pairs'][after] = pair
     return result
 
 

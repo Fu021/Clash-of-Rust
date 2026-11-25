@@ -3,7 +3,9 @@ package org.clashofrust.android;
 import android.content.*;
 import android.net.*;
 import android.os.Build;
+import android.os.Debug;
 import android.os.SystemClock;
+import android.util.Log;
 import android.view.MotionEvent;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.test.platform.app.InstrumentationRegistry;
@@ -3682,11 +3684,43 @@ public class ProxyTunTest {
             await("The retained VPN could not reconfigure after recovery timed out",
                 () -> TunnelService.connected() && TunnelService.generation() > generation);
             tunResolvesAndCarriesHttp();
+            if (Build.VERSION.SDK_INT >= 36) {
+                sampleForegroundAndBackgroundMemory(controller, secret);
+            }
         } finally {
             TunnelService.stop(context);
         }
         awaitDirectRecovery(connectivity);
         verifyRecoveryConsentRecreation(context);
+    }
+
+    private static void sampleForegroundAndBackgroundMemory(String controller, String secret) throws Exception {
+        shell("am start -W -n org.clashofrust.android/.MainActivity");
+        await("Activity did not reach the foreground for memory sampling",
+            () -> inStage(androidx.test.runner.lifecycle.Stage.RESUMED, true));
+        SystemClock.sleep(3000);
+        recordProcessMemory("foreground");
+        shell("am start -W -a android.intent.action.MAIN -c android.intent.category.HOME");
+        await("Activity did not reach the background for memory sampling",
+            () -> inStage(androidx.test.runner.lifecycle.Stage.STOPPED, false));
+        try {
+            SystemClock.sleep(3000);
+            recordProcessMemory("background");
+            assertTrue("Backgrounding the Activity disconnected the VPN", TunnelService.connected());
+            tunCarriesSocket(controller, secret);
+        } finally {
+            shell("am start -W -n org.clashofrust.android/.MainActivity");
+            await("Activity did not resume after memory sampling",
+                () -> inStage(androidx.test.runner.lifecycle.Stage.RESUMED, true));
+        }
+    }
+
+    private static void recordProcessMemory(String stage) {
+        Debug.MemoryInfo memory = new Debug.MemoryInfo();
+        Debug.getMemoryInfo(memory);
+        Log.i("CorMemorySample", "stage=" + stage + " pid=" + android.os.Process.myPid()
+            + " pss_kib=" + memory.getTotalPss() + " private_dirty_kib=" + memory.getTotalPrivateDirty()
+            + " private_clean_kib=" + memory.getTotalPrivateClean());
     }
 
     @Test public void localProxyAndRealTunCarryTrafficAndDisconnectCleanly() throws Exception {

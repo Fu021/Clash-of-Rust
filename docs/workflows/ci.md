@@ -90,7 +90,7 @@ Linux CI 从固定 digest 的 Ubuntu 容器编译。宿主先下载并校验内�
 
 DEB 安装验收前，编译容器与 Linux 兼容 runner 共用签名 APT 索引刷新。刷新失败后分别等待 5 秒和 15 秒再试，每次刷新单独限时，三次仍失败则终止验收。
 
-共享输入阶段为 Ubuntu 20.04 x64 和 ARM64 的专项来宾准备官方云镜像、独立 Python 和冻结的签名 APT 索引。镜像及工具归档按 CI 快照的 SHA256 校验。[Ubuntu Compatibility](ubuntu-compatibility.md) 的基础作业使用同架构容器。显式跨版本更新时启动对应架构的来宾，用冻结 APT 输入准备测试工具，必要时使用当前签名索引并记录回退。
+Ubuntu 专项使用的官方云镜像、独立 Python 和冻结 APT 输入由 CI 快照固定并校验。常驻验收使用原生 runner 或同架构容器。仅显式的 x64 跨版本更新专项按需启动来宾，用冻结 APT 输入准备测试工具，必要时使用当前签名索引并记录回退。详见 [Ubuntu Compatibility](ubuntu-compatibility.md)。
 
 ### 测试覆盖
 
@@ -112,7 +112,7 @@ DEB 安装验收前，编译容器与 Linux 兼容 runner 共用签名 APT 索�
 - main push、PR 更新触发 CI；过时运行自动取消。本地生成的编译、打包产物和缓存已在 `.gitignore` 中排除，不应提交。
 - 桌面后台、界面程序、`cor` 和网络助手一起导出，并在同一 runner 生成安装包，执行[安装验收](install-validation.md)。构建附件上传后用实际 id/digest 和本地归档校验暂存，不再次下载，也不额外申请 macOS runner。Android 在候选 APK 上执行代理/TUN 集成，不对同一开发签名包重复测试。九组候选包、SHA256、安装收据与源码附件保留 3 天，全部必需 job 成功才能发布。产物记录提交、版本、架构、Cargo.lock、工具链及逐文件校验值；仅附带必要的 `core_integration` 测试程序，不上传源码单元测试程序。桌面构建产物采用 schema 3，只与同一提交配套使用。
 
-Android x86_64 使用 Android 16（API 36）模拟器验证真实 VPN 授权、代理请求、TUN 流量、DNS 和断开恢复。[应用分流](../android-application-routing.md#范围与验证)相关变化或扩展模式会追加三种分流模式；完整授权取消、Activity 重建与冷磁贴归扩展模式。选中移动界面回归时，x64 作业安装软件渲染测试所需的字体开发库，并启用 `mobile-ui-tests` 执行宿主界面 Clippy 和测试。三个作业分别对各自 Android 目标执行 Clippy 和编译。ARM64/ARMv7 完成 Gradle lint 与架构校验，仍需真机验收。Android 测试结果、体积报告和 logcat 保存在 `android-report-{arch}`，固定开发签名与构建说明见 [Android 宿主](../../apps/android/README.md)。
+Android x86_64 使用 Android 16（API 36）模拟器验证真实 VPN 授权、代理请求、TUN 流量、DNS 和断开恢复，并留存[前后台采样](memory.md#android-前后台采样)。[应用分流](../android-application-routing.md#范围与验证)相关变化或扩展模式会追加三种分流模式；完整授权取消、Activity 重建与冷磁贴归扩展模式。选中移动界面回归时，x64 作业安装软件渲染测试所需的字体开发库，并启用 `mobile-ui-tests` 执行宿主界面 Clippy 和测试。三个作业分别对各自 Android 目标执行 Clippy 和编译。ARM64/ARMv7 完成 Gradle lint 与架构校验，仍需真机验收。Android 测试结果、体积报告和 logcat 保存在 `android-report-{arch}`，固定开发签名与构建说明见 [Android 宿主](../../apps/android/README.md)。
 
 Android x64 候选包收集常规报告后运行保护恢复的两阶段回归。普通 `test` 及 `package --arch x64` 的常规测试阶段使用当前 ADB 目标，可向该目标安装 APK 并修改 VPN 授权。CI 为这些操作预先启动可丢弃的模拟器。本地单独运行进程死亡回归时，用同一个 `RUNNER_TEMP` 启动可丢弃的 API 36 `cor-ci` AVD 和执行 `python3 scripts/android.py test --arch x64 --protection-death-only`。
 

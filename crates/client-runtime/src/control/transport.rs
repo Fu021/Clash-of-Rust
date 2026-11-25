@@ -5,6 +5,7 @@ use crate::{
 };
 use anyhow::{Context, Result, bail, ensure};
 use serde::de::DeserializeOwned;
+use serde_json::value::RawValue;
 use std::{
     future::Future,
     io::{Read, Write},
@@ -23,6 +24,14 @@ use tokio::{
 const CONTROL_SLOTS: u32 = 4;
 const LARGE_VIEW_BYTES: usize = 128 * 1024;
 const VIEW_IDLE_DELAY: Duration = Duration::from_secs(3);
+
+fn decode_reply<T: DeserializeOwned>(bytes: &[u8]) -> Result<T> {
+    let reply: Reply<&RawValue> = serde_json::from_slice(bytes)?;
+    if let Some(error) = reply.error {
+        bail!("{error}");
+    }
+    Ok(serde_json::from_str(reply.result.get())?)
+}
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Endpoint {
@@ -143,11 +152,7 @@ impl Remote {
         ensure!(length <= RESPONSE_LIMIT, "后台响应超过 32 MiB 限制");
         let mut bytes = vec![0; length];
         stream.read_exact(&mut bytes)?;
-        let reply: Reply = serde_json::from_slice(&bytes)?;
-        if let Some(error) = reply.error {
-            bail!("{error}");
-        }
-        Ok(serde_json::from_value(reply.result)?)
+        decode_reply(&bytes)
     }
     pub async fn request<T: DeserializeOwned + Send + 'static>(
         &self,
@@ -171,11 +176,7 @@ impl Remote {
             ensure!(size <= RESPONSE_LIMIT, "后台响应超过 32 MiB 限制");
             let mut bytes = vec![0; size];
             stream.read_exact(&mut bytes).await?;
-            let reply: Reply = serde_json::from_slice(&bytes)?;
-            if let Some(error) = reply.error {
-                bail!("{error}");
-            }
-            Ok::<T, anyhow::Error>(serde_json::from_value(reply.result)?)
+            decode_reply(&bytes)
         };
         tokio::time::timeout(self.timeout, exchange).await?
     }
@@ -368,10 +369,16 @@ pub async fn serve(engine: &Arc<Mutex<Engine>>, owner: Owner) -> Result<()> {
                         }
                     }
                 };
+                let large_source = matches!(
+                    &reply.result,
+                    Payload::RuleShortcutStatus { source_bytes, .. }
+                        if *source_bytes >= LARGE_VIEW_BYTES
+                );
                 let bytes = serde_json::to_vec(&reply);
                 drop(reply);
                 if let Ok(mut bytes) = bytes {
-                    let large_view = view_request && bytes.len() >= LARGE_VIEW_BYTES;
+                    let large_view =
+                        large_source || (view_request && bytes.len() >= LARGE_VIEW_BYTES);
                     if bytes.len() > RESPONSE_LIMIT {
                         bytes = serde_json::to_vec(&Reply {
                             result: Value::Null,
@@ -436,9 +443,18 @@ mod tests {
         let legacy: Reply = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(legacy.result, expected);
         assert!(legacy.error.is_none());
-        let decoded: Poll = serde_json::from_value(legacy.result).unwrap();
+        let decoded: Poll = decode_reply(&bytes).unwrap();
         assert_eq!(decoded.meta.owner, Owner::Daemon);
         assert!(!decoded.snapshot.running);
+    }
+
+    #[test]
+    fn typed_reply_preserves_null_success_and_server_errors() {
+        assert!(decode_reply::<()>(br#"{"result":null,"error":null}"#).is_ok());
+        let error =
+            decode_reply::<Poll>(br#"{"result":null,"error":"backend unavailable"}"#).unwrap_err();
+        assert_eq!(error.to_string(), "backend unavailable");
+        assert!(decode_reply::<Poll>(br#"{"result":null,"error":null}"#).is_err());
     }
 
     #[test]

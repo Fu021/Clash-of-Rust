@@ -3,6 +3,7 @@ use crate::messages;
 use anyhow::{Context, Result, ensure};
 use clash_client_core::{
     config::{Language, Profile},
+    rule_manager::{Document, ShortcutStatus},
     subscription::{self, SummaryPart},
 };
 use clash_client_runtime::control::{Command, Poll, Remote};
@@ -23,7 +24,7 @@ pub(super) struct Shortcuts {
     pub profile: String,
     pub revision: u64,
     pub included: [bool; 5],
-    pub document: Option<Arc<clash_client_core::rule_manager::Document>>,
+    pub document: Option<Arc<Document>>,
     pub error: Option<ShortcutReadError>,
     pub sampled: Instant,
 }
@@ -59,17 +60,25 @@ pub(super) async fn read_shortcuts(
     }) {
         return Some(cached);
     }
-    let document = remote
-        .request::<clash_client_core::rule_manager::Document>(Command::RuleDocument {
-            id: profile.clone(),
-        })
-        .await;
-    let (included, document, error) = match document {
-        Ok(document) if document.profile_id == *profile => (
-            document.included,
-            include_rules.then(|| Arc::new(document)),
-            None,
-        ),
+    let command = Command::RuleDocument {
+        id: profile.clone(),
+        summary_only: !include_rules,
+    };
+    let result = if include_rules {
+        remote
+            .request::<Document>(command)
+            .await
+            .map(|document| (document.shortcut_status(), Some(Arc::new(document))))
+    } else {
+        remote
+            .request::<ShortcutStatus>(command)
+            .await
+            .map(|status| (status, None))
+    };
+    let (included, document, error) = match result {
+        Ok((status, document)) if status.profile_id == *profile => {
+            (status.included, document, None)
+        }
         Ok(_) => ([false; 5], None, Some(ShortcutReadError::ProfileChanged)),
         Err(error) => (
             [false; 5],

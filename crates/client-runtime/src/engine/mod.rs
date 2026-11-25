@@ -16,6 +16,7 @@ use crate::{
 use anyhow::{Context, Result, bail, ensure};
 use futures_util::StreamExt;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::{
     collections::VecDeque,
     fs::File,
@@ -200,6 +201,7 @@ pub struct Engine {
     last_totals: Option<(Instant, u64, u64)>,
     version: String,
     node_root: Mutex<Option<String>>,
+    rule_shortcut_cache: Option<([u8; 32], crate::rule_manager::ShortcutStatus)>,
     protection_guard: Option<crate::claude_check::guard::Guard>,
     // Held for the entire application lifetime; prevents two clients racing on recovery.
     _instance_lock: Option<File>,
@@ -358,6 +360,7 @@ impl Engine {
             last_totals: None,
             version: String::new(),
             node_root: Mutex::new(None),
+            rule_shortcut_cache: None,
             protection_guard: None,
             _instance_lock: Some(instance),
             remote: None,
@@ -831,15 +834,41 @@ impl Engine {
 
     pub fn rule_document(&self, id: &str) -> Result<crate::rule_manager::Document> {
         if let Some(remote) = &self.remote {
-            return remote.call(ControlCommand::RuleDocument { id: id.into() });
+            return remote.call(ControlCommand::RuleDocument {
+                id: id.into(),
+                summary_only: false,
+            });
         }
+        let (builtin, raw) = self.rule_source(id)?;
+        crate::rule_manager::Document::from_raw(id, builtin, &raw)
+    }
+
+    pub(crate) fn rule_shortcuts(
+        &mut self,
+        id: &str,
+    ) -> Result<(crate::rule_manager::ShortcutStatus, usize)> {
+        let (builtin, raw) = self.rule_source(id)?;
+        let digest = Sha256::digest(raw.as_bytes()).into();
+        if let Some((cached_digest, status)) = &self.rule_shortcut_cache
+            && *cached_digest == digest
+            && status.profile_id == id
+            && status.builtin == builtin
+        {
+            return Ok((status.clone(), raw.len()));
+        }
+        let status = crate::rule_manager::ShortcutStatus::from_raw(id, builtin, &raw)?;
+        self.rule_shortcut_cache = Some((digest, status.clone()));
+        Ok((status, raw.len()))
+    }
+
+    fn rule_source(&self, id: &str) -> Result<(bool, String)> {
         let profile = self
             .profiles
             .iter()
             .find(|p| p.id == id)
             .context("订阅不存在")?;
         let raw = read_profile(&self.store.profile_path(id)?)?;
-        crate::rule_manager::Document::from_raw(id, profile.is_default(), &raw)
+        Ok((profile.is_default(), raw))
     }
 
     pub async fn save_profile_rules(

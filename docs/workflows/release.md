@@ -17,7 +17,7 @@
 
 正式版还须同步[网站版本介绍](../../website/README.md)：在 `website/src/content/releases.json` 维护发布日期、中英文亮点、必要限制和九组安装包数据，保留历次正式版入口；预发布不单独更新网站内容或版本记录。以同版发布文案为依据，执行 `python website/build.py`，检查两种语言的版本页、下载及 SHA256 入口；发布后核对公开标签、日期和附件，不把未发布版本写成已发布。网页维护和验收细节只在网站说明中维护。
 
-正式版和预发布版的文字按[发布文案模板](../releases/TEMPLATE.md)准备并随源码提交。发布程序校验该提交的文案后，在首段之后、更新详情之前放置完整下载区，避免 GitHub Releases 列表截断长正文时切断徽章链接。九种安装包及其计数均固定到本次标签及具体文件，正式版与预发布共用按标签查询的计数入口。下载量由 Shields.io 读取 GitHub 附件计数，可能因缓存延迟更新；计数包含重复下载与自动校验，不代表独立用户数。SHA256 文件仍在 Release 附件中。
+正式版和预发布版的文字按[发布文案模板](../releases/TEMPLATE.md)准备并随源码提交。发布程序校验该提交的文案后，在首段之后、更新详情之前放置完整下载区，避免 GitHub Releases 列表截断徽章链接。每个安装包和下载计数均固定到本次标签及具体文件。下载量由 Shields.io 从 GitHub 读取，可能延迟更新，也包含重复下载与自动校验。每个安装包都有对应的 SHA256 附件。
 
 从修复分支发布时，选择该分支，填写其成功 CI 编号，设置 `check_only=false`、`prerelease=true`。流程照常验证九平台安装包与来源，最终以预发布标签公开，不更新稳定版 latest、不合并或删除来源分支。上传结束还会重新核对该来源分支头；期间分支前移则保留未公开草稿并失败。未显式选择预发布时，公开发布仍只接受 main 的 push CI。预发布与正式发布使用相同的发行签名要求，Android 不能用临时 CI 测试签名冒充发行签名。
 
@@ -51,6 +51,8 @@ Ubuntu 18.04 未纳入此基线或兼容矩阵，不能从 20.04 的验证结果
 ### 兼容性发布门禁
 
 普通 CI 成功后，以同一 `ci_run_id` 并行运行 [Android Compatibility](android-compatibility.md)、[Ubuntu Compatibility](ubuntu-compatibility.md) 和本次发布所涉及的其他发行版工作流。默认范围也需要 [Debian Compatibility](debian-compatibility.md) 和 [Arch Linux Compatibility](linux-expansion.md#arch-linux-原生包)。Linux 各套常规门禁安装同源候选包并执行基础系统代理与 TUN 检查。每套矩阵的所有目标及最终回执 job 均须成功。
+
+覆盖所有现有发行版的发布使用 `linux_scope=debian,linuxmint,pop,zorin,fedora,opensuse,arch`。Android 与 Ubuntu 自动加入，合计九套兼容工作流。附件包含 Windows、macOS、DEB 和 RPM 的双架构包，Arch x64 原生包和 Android 三种 ABI，共十二个安装包。
 
 `scripts/compatibility.py` 自动查找同提交最新的兼容运行，并核对 workflow 路径、同仓库、成功终态、所有必需 job、attempt 及回执 ZIP 的 digest。回执必须精确绑定所选 CI 的输入 artifact id/name/digest；只检查分支名、工作流绿色、旧运行成功或过期附件均不够。最新兼容运行尚未完成或失败时阻止发布，不静默退回旧结果。前置解析和最终核验都执行门禁，`check_only`、正式版与预发布一视同仁。
 

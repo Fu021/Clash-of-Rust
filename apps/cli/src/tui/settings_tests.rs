@@ -20,7 +20,7 @@ async fn changed_subscription_shows_the_selected_language_in_shortcuts() {
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let server = tokio::spawn(async move {
-        for index in 0..2 {
+        for index in 0..3 {
             let (mut stream, _) = listener.accept().await.unwrap();
             let length = stream.read_u32().await.unwrap() as usize;
             let mut request = vec![0; length];
@@ -28,14 +28,19 @@ async fn changed_subscription_shows_the_selected_language_in_shortcuts() {
             let request: serde_json::Value = serde_json::from_slice(&request).unwrap();
             assert_eq!(request["operation"]["command"], "rule-document");
             assert_eq!(request["operation"]["id"], "selected-profile");
-            let reply = if index == 0 {
+            if index == 0 {
+                assert!(request["operation"].get("summary_only").is_none());
+            } else {
+                assert_eq!(request["operation"]["summary_only"], true);
+            }
+            let reply = if index != 1 {
                 serde_json::json!({
                     "result": {
-                        "profile_id": "different-profile",
+                        "profile_id": if index == 0 {"different-profile"} else {"selected-profile"},
                         "builtin": false,
                         "original": [],
                         "policies": [],
-                        "included": [false, false, false, false, false]
+                        "included": [index == 2, false, false, false, false]
                     },
                     "error": null
                 })
@@ -71,21 +76,27 @@ async fn changed_subscription_shows_the_selected_language_in_shortcuts() {
     });
     let mut state = State::new(false);
     state.accept(Some(poll));
-    for (chinese, english) in [
+    for (include_rules, chinese, english) in [
         (
+            true,
             "订阅已变化，请刷新后重试",
             "The subscription changed; refresh and try again",
         ),
         (
+            false,
             "设置已被另一客户端修改，请刷新后重试",
             "Settings changed in another client; refresh and try again",
         ),
     ] {
         state.set_language(SimplifiedChinese);
-        let status =
-            crate::tui::catalog::read_shortcuts(&remote, state.poll.as_ref().unwrap(), None, true)
-                .await
-                .unwrap();
+        let status = crate::tui::catalog::read_shortcuts(
+            &remote,
+            state.poll.as_ref().unwrap(),
+            None,
+            include_rules,
+        )
+        .await
+        .unwrap();
         assert!(status.document.is_none());
         state.shortcuts = Some(status);
         for (language, expected) in [(SimplifiedChinese, chinese), (English, english)] {
@@ -99,6 +110,13 @@ async fn changed_subscription_shows_the_selected_language_in_shortcuts() {
             assert!(crate::tui::catalog::open_shortcut(&state, "shortcut_ads").is_err());
         }
     }
+    let status =
+        crate::tui::catalog::read_shortcuts(&remote, state.poll.as_ref().unwrap(), None, false)
+            .await
+            .unwrap();
+    assert!(status.error.is_none());
+    assert!(status.document.is_none());
+    assert!(status.included[0]);
     server.await.unwrap();
 }
 

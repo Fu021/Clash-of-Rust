@@ -114,6 +114,8 @@ pub enum Command {
     },
     RuleDocument {
         id: String,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        summary_only: bool,
     },
     SaveRules {
         id: String,
@@ -245,6 +247,13 @@ struct Reply<T = Value> {
 enum Payload {
     Json(Value),
     Snapshot(Box<Poll>),
+    RuleDocument(Box<crate::rule_manager::Document>),
+    RuleShortcutStatus {
+        #[serde(flatten)]
+        status: crate::rule_manager::ShortcutStatus,
+        #[serde(skip)]
+        source_bytes: usize,
+    },
 }
 
 impl From<Value> for Payload {
@@ -394,6 +403,7 @@ mod tests {
             },
             Command::RuleDocument {
                 id: "fixture".into(),
+                summary_only: false,
             },
             Command::TrayNodes,
             Command::Delay {
@@ -557,14 +567,61 @@ mod tests {
         );
         let document = dispatch::execute(
             &shared,
-            Command::RuleDocument { id: first.clone() },
+            Command::RuleDocument {
+                id: first.clone(),
+                summary_only: false,
+            },
             Owner::Daemon,
             None,
         )
         .await
         .unwrap();
-        let document = serde_json::to_value(document).unwrap();
-        assert_eq!(document["included"][0].as_bool(), Some(false));
+        assert!(matches!(&document, Payload::RuleDocument(_)));
+        let bytes = serde_json::to_vec(&Reply {
+            result: document,
+            error: None,
+        })
+        .unwrap();
+        let reply: Reply<crate::rule_manager::Document> = serde_json::from_slice(&bytes).unwrap();
+        assert!(reply.error.is_none());
+        let expected = crate::rule_manager::Document::from_raw(&first, false, plain).unwrap();
+        assert_eq!(
+            serde_json::to_value(reply.result).unwrap(),
+            serde_json::to_value(&expected).unwrap()
+        );
+        let summary = dispatch::execute(
+            &shared,
+            Command::RuleDocument {
+                id: first.clone(),
+                summary_only: true,
+            },
+            Owner::Daemon,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(summary).unwrap(),
+            serde_json::json!({"profile_id": first, "builtin": false, "included": expected.included})
+        );
+        let updated = format!(
+            "proxies: []\nrules:\n  - '{}'\n",
+            clash_client_core::config::SUBSCRIPTION_RULES[0]
+        );
+        std::fs::write(&path, &updated).unwrap();
+        let summary = dispatch::execute(
+            &shared,
+            Command::RuleDocument {
+                id: first.clone(),
+                summary_only: true,
+            },
+            Owner::Daemon,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(serde_json::to_value(summary).unwrap()["included"][0], true);
+        std::fs::write(&path, plain).unwrap();
 
         {
             let mut engine = shared.lock().await;

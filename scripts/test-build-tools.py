@@ -4941,12 +4941,28 @@ Private_Clean: 2 kB
         with self.assertRaisesRegex(ValueError, 'changed'):
             lifecycle.owner_pair([dict(baseline, processes=[daemon, dict(core, start_time=9)])],
                                  'daemon', owner, True)
-        pure_cli = lifecycle.readings(baseline, 'daemon')
+        pure_cli = [dict(row, elapsed_ms=value, daemon=dict.fromkeys(lifecycle.METRICS, memory))
+                    for row, value, memory in zip(rows, (2, 10_250, 30_040, 59_970), (512, 256, 512, 1024))]
         checkpoints = lifecycle.checkpoints(rows, 'daemon', pure_cli)
         self.assertEqual(checkpoints['60']['elapsed_ms'], 60_150)
+        self.assertEqual(checkpoints['60']['cli_elapsed_ms'], 59_970)
         self.assertEqual(checkpoints['60']['gap_to_cli']['client']['pss_bytes']['bytes'], 0)
+        self.assertEqual(checkpoints['10']['gap_to_cli']['client']['pss_bytes']['bytes'], 768)
         with self.assertRaisesRegex(ValueError, '60 seconds'):
-            lifecycle.checkpoints(rows[:-1], 'daemon', pure_cli)
+            lifecycle.checkpoints(rows, 'daemon', pure_cli[:-1])
+
+    def test_memory_plan_keeps_gui_and_cli_baselines_on_their_measurement_runners(self):
+        shards = memory_benchmark.memory_shards
+        plan = shards.plan(dict(slint=True, cli=True, overrides=True, tui=True,
+                                settings=True, catalog=True, desktop_background=True))
+        for variant in ('plain', 'rules'):
+            prefix = ('rules-' if variant == 'rules' else '') + 'background-'
+            self.assertIn(prefix+'gui-headless', plan[variant+'-gui'])
+            self.assertIn(prefix+'tray-idle', plan[variant+'-gui'])
+            self.assertIn(prefix+'headless', plan[variant+'-cli'])
+            self.assertIn(prefix+'tui-after-cycles-closed', plan[variant+'-cli'])
+            for baseline in ('gui-headless', 'tray-idle', 'headless'):
+                self.assertEqual(shards.scene_seconds(prefix+baseline, 10), 61)
 
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
