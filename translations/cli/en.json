@@ -31,6 +31,7 @@
   "help_commands_heading": "Commands:",
   "help_common_command_groups": "  profile                   Add, switch, and update subscriptions. See cor profile help.\n  node                      Pick and test nodes. See cor node help.\n",
   "help_common_commands": "Common commands:",
+  "help_describe_agent_guide": "Read the built-in guide for AI agents.",
   "help_describe_autostart": "Show or change backend autostart.",
   "help_describe_claude_audit": "Inspect the current terminal environment and recorded Claude project settings.",
   "help_describe_claude_browser": "Open a local browser probe and wait for its report.",

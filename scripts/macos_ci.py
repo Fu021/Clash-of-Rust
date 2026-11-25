@@ -138,10 +138,47 @@ def cleanup_gui(process, controller_port, label, primary_error=None):
             raise
 
 
-def gui_smoke(app, label):
+def verify_cli_path(app, env, home, process):
+    profile = home/'.zprofile'
+    marker = '# >>> Clash of Rust cor >>>'
+    link = home/'.local/share/clash-of-rust/bin/cor'
+    deadline = time.monotonic()+10
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            raise RuntimeError(f'GUI exited before configuring cor PATH: {process.returncode}')
+        if profile.is_file() and marker in profile.read_text(encoding='utf-8').splitlines():
+            break
+        time.sleep(.1)
+    else:
+        raise RuntimeError('The installed app did not configure cor PATH')
+    if profile.read_text(encoding='utf-8').splitlines().count(marker) != 1:
+        raise RuntimeError('The zsh profile contains duplicate cor configuration')
+    if not link.is_symlink() or link.resolve(strict=True) != (app/'Contents/MacOS/cor').resolve(strict=True):
+        raise RuntimeError('The cor link does not point to the installed app')
+
+    def login_shell(command):
+        return run(['/bin/zsh', '-lc', command], env=env, capture_output=True,
+                   encoding='utf-8', timeout=15).stdout.strip()
+
+    if login_shell('command -v cor') != str(link):
+        raise RuntimeError('A new zsh login shell did not resolve the installed cor link')
+    guide = json.loads(login_shell('cor agent guide --lang=en --json'))['data']
+    if not guide['markdown'].startswith('# Clash of Rust'):
+        raise RuntimeError('The installed cor did not return the English agent guide')
+    status = json.loads(login_shell('cor status --json'))['data']
+    if status['running'] is not True:
+        raise RuntimeError('The installed cor cannot see the running desktop backend')
+    report = json.loads(login_shell('cor diagnose --offline --json'))['data']
+    if report['resources'] != str(app/'Contents/Resources/resources'):
+        raise RuntimeError('The installed cor cannot find bundled resources through PATH')
+    return {'shell': 'zsh', 'bundled_resources': True, 'desktop_backend': True}
+
+
+def gui_smoke(app, label, cli_home, verify_windows):
     # Private data directory avoids existing profiles and proxy journals.
     with tempfile.TemporaryDirectory(prefix='clash-gui-') as temporary:
-        env = dict(os.environ, CLASH_OF_RUST_DATA_DIR=temporary)
+        env = dict(os.environ, CLASH_OF_RUST_DATA_DIR=temporary,
+                   HOME=str(cli_home), ZDOTDIR=str(cli_home), SHELL='/bin/zsh')
         binary = app/'Contents/MacOS/clash-of-rust'
         with (REPORT/(label+'-gui.log')).open('w') as log:
             process = subprocess.Popen([binary], env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
@@ -161,6 +198,9 @@ def gui_smoke(app, label):
                         break
                     except (OSError, KeyError, StopIteration, json.JSONDecodeError): time.sleep(.2)
                 if not version: raise RuntimeError('GUI did not start a healthy core within 45 seconds')
+                suite('Installed cor on the shell PATH', lambda: verify_cli_path(app, env, cli_home, process))
+                if not verify_windows:
+                    return {'core': version}
                 # Core readiness alone cannot prove that a GUI window was created.
                 swift = REPORT/'windows.swift'
                 swift.write_text('''import Foundation
@@ -341,10 +381,13 @@ def installed_package_tests(package, manifest, build):
         validate_resources(app/'Contents/Resources/resources', 'macos')
         suite('Sealed app signature', lambda: logged('codesign', ['/usr/bin/codesign', '--verify', '--deep', '--strict', app]))
         with tempfile.TemporaryDirectory(prefix='clash-install-') as temporary:
-            installed = Path(temporary)/APP_NAME
+            home = Path(temporary).resolve()
+            installed = home/'Applications'/APP_NAME
+            installed.parent.mkdir()
             run(['/usr/bin/ditto', app, installed])
-            if extended_tests() or desktop_ui_tests():
-                suite('Installed GUI, window and bundled core', lambda: gui_smoke(installed, 'installed'))
+            verify_windows = extended_tests() or desktop_ui_tests()
+            label = 'Installed GUI, window and bundled core' if verify_windows else 'Installed app startup'
+            suite(label, lambda: gui_smoke(installed, 'installed', home, verify_windows))
             suite('Installed system proxy and TUN', lambda: logged('installed-proxy-modes',
                 [sys.executable, ROOT/'scripts/test-proxy-modes.py',
                  '--test-binary', build/manifest['tests']['core_integration'],

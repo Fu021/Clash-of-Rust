@@ -18,6 +18,7 @@ use windows_sys::Win32::{
     },
     UI::Shell::{SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW, ShellExecuteExW},
 };
+mod cli_path;
 mod pipe;
 mod runtime;
 mod scm;
@@ -289,6 +290,8 @@ pub fn helper_main() -> Result<i32> {
     match args.first().and_then(|s| s.to_str()) {
         Some("--windows-service-install") if args.len() == 1 => scm::install()?,
         Some("--windows-service-uninstall") if args.len() == 1 => scm::uninstall()?,
+        Some("--windows-cli-path-add") if args.len() == 1 => cli_path::set(true)?,
+        Some("--windows-cli-path-remove") if args.len() == 1 => cli_path::set(false)?,
         Some("--windows-service-stop") if args.len() == 1 => {
             ensure!(security::administrator()?, "停止服务需要管理员权限");
             scm::stop()?;

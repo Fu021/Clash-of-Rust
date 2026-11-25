@@ -3815,7 +3815,8 @@ class BuildTests(unittest.TestCase):
                     'version': '0.7.2', 'arch': 'arm64',
                     'tests': {'core_integration': 'core_integration'},
                 }, root/'build')
-                self.assertEqual(gui.called, expected)
+                gui.assert_called_once()
+                self.assertEqual(gui.call_args.args[-1], expected)
 
     def test_linux_guest_package_preparation_skips_documentation_indexes(self):
         with patch.dict(os.environ, {'COR_LINUX_GUEST': 'true'}), \
@@ -9292,6 +9293,7 @@ runpy.run_path(str(script), run_name='__main__')
                  patch.object(windows, 'scan_windows_files', return_value=evidence) as scan, \
                  patch.object(windows, '_verify_installed_package') as verify:
                 platform.name = 'nt'
+                platform.environ = {'ProgramFiles': str(root)}
                 manifest = {'tests': {'core_integration': 'tests/core_integration.exe'}}
                 package.write_bytes(b'installer')
                 smoke.parent.mkdir(parents=True)

@@ -195,6 +195,7 @@ pub fn ensure_available(interactive: bool) -> Result<()> {
         "网络助手需要首次授权或修复，请打开客户端并重新选择系统代理或 TUN 模式"
     );
     let launcher = std::env::current_exe()?
+        .canonicalize()?
         .parent()
         .context("无法定位网络助手")?
         .join("clash-tun-launcher");

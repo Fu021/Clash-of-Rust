@@ -31,6 +31,7 @@
   "help_commands_heading": "命令：",
   "help_common_command_groups": "  profile                   订阅添加、切换与更新；cor profile help\n  node                      节点选择与测速；cor node help\n",
   "help_common_commands": "常用命令：",
+  "help_describe_agent_guide": "阅读内置的 AI Agent 指南",
   "help_describe_autostart": "读取或配置后台自启动",
   "help_describe_claude_audit": "扫描实际终端环境与已记录 Claude 项目配置",
   "help_describe_claude_browser": "创建浏览器真实采样入口并等待报告",

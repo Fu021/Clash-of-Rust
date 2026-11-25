@@ -19,6 +19,8 @@ pub async fn download_geo(
 
 pub fn discover() -> Result<PathBuf> {
     let exe = std::env::current_exe()?;
+    #[cfg(target_os = "macos")]
+    let exe = exe.canonicalize()?;
     let sibling = exe.parent().context("无法定位应用目录")?.join("resources");
     if sibling.is_dir() {
         return Ok(sibling);

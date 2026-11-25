@@ -421,7 +421,7 @@ def installed_gui_smoke(installed, root):
     run_unelevated([installed/'clash-of-rust.exe'], env, timeout=120, on_start=inspect)
 
 
-def _verify_installed_package(package, binary, root, smoke):
+def _verify_installed_package(package, binary, root, installed, smoke):
     from ci_test_policy import extended_tests
     import winreg
     if os.environ.get('GITHUB_ACTIONS') != 'true':
@@ -433,17 +433,31 @@ def _verify_installed_package(package, binary, root, smoke):
                 raise RuntimeError('Existing production installation; refusing to replace it')
         except FileNotFoundError:
             pass
+    environment = r'SYSTEM\CurrentControlSet\Control\Session Manager\Environment'
+
+    def machine_path():
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, environment) as key:
+            return winreg.QueryValueEx(key, 'Path')
+
+    before, path_kind = machine_path()
+    expected_path = f'{before};{installed}' if before else str(installed)
+
     # Python 3.13's private temporary directory can be owned by the elevated
     # runner's Administrators group. The ordinary test token must traverse it
     # and read/execute the installed application, without granting write access
     # or changing the production service directory's protected ACL.
     allow_ordinary_user_directory(root, permissions='RX')
-    installed = root/'自定义安装目录 with spaces'
+    allow_ordinary_user_directory(installed.parent, permissions='RX')
     _installer_exit(package, ['/S', f'/D={installed}'], 0)
     try:
         with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key, 0, winreg.KEY_READ | winreg.KEY_WOW64_64KEY) as registration:
             assert winreg.QueryValueEx(registration, 'DisplayVersion')[0] == file_version(binary)
             assert winreg.QueryValueEx(registration, 'InstallLocation')[0] == str(installed)
+        assert machine_path() == (expected_path, path_kind)
+        result = run([Path(os.environ['SystemRoot'])/'System32/cmd.exe', '/D', '/C', 'cor --version'],
+                     env=dict(os.environ, PATH=os.path.expandvars(expected_path)),
+                     encoding='utf-8', capture_output=True, timeout=15)
+        assert file_version(binary) in result.stdout
         assert sha256(installed/'clash-of-rust.exe') == sha256(binary)
         assert sha256(installed/'clash-desktop-ui.exe') == sha256(binary.with_name('clash-desktop-ui.exe'))
         validate_resources(installed/'resources', 'windows')
@@ -461,6 +475,14 @@ def _verify_installed_package(package, binary, root, smoke):
             from windows_update_tests import verify_write_failures
             verify_write_failures(package, installed, binary.parent, _installer_exit)
             _installer_exit(package, ['/S', '/UPDATE', f'/D={installed}'], 0)
+            assert machine_path() == (expected_path, path_kind)
+            run([installed/'clash-tun-launcher.exe', '--windows-cli-path-remove'], timeout=15)
+            assert machine_path() == (before, path_kind)
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key, 0,
+                                winreg.KEY_SET_VALUE | winreg.KEY_WOW64_64KEY) as registration:
+                winreg.DeleteValue(registration, 'CliPathEnabled')
+            _installer_exit(package, ['/S', '/UPDATE', f'/D={installed}'], 0)
+            assert machine_path() == (expected_path, path_kind)
             assert sha256(installed/'clash-desktop-ui.exe') == sha256(binary.with_name('clash-desktop-ui.exe'))
             assert not list(installed.glob('*.update-backup.exe'))
             assert user_file.read_text(encoding='utf-8') == 'Preserve this unrelated file'
@@ -473,6 +495,7 @@ def _verify_installed_package(package, binary, root, smoke):
     assert not (installed/'clash-of-rust.exe').exists()
     assert not (installed/'clash-desktop-ui.exe').exists()
     assert not (installed/'clash-tun-launcher.exe').exists()
+    assert machine_path() == (before, path_kind)
     assert subprocess.run(['sc.exe', 'query', 'ClashOfRust.Network'], capture_output=True).returncode == 1060
     assert user_file.is_file()
     try:
@@ -612,10 +635,16 @@ def package_tests(package, manifest, build):
     defender = scan_windows_files([package, *payload_files])
     (ROOT/'dist').mkdir(exist_ok=True)
     temporary = tempfile.TemporaryDirectory(prefix='installer-test-', dir=ROOT/'dist')
+    program_files = Path(os.environ.get('ProgramW6432', os.environ['ProgramFiles']))
+    install_location = tempfile.TemporaryDirectory(prefix='Clash of Rust CI ', dir=program_files)
     try:
         _verify_installed_package(package.resolve(strict=True), build/'payload/clash-of-rust.exe',
                            Path(temporary.name),
+                           Path(install_location.name)/'自定义安装目录 with spaces',
                            (build/manifest['tests']['core_integration']).resolve(strict=True))
     finally:
-        _cleanup_installer(temporary)
+        try:
+            _cleanup_installer(install_location)
+        finally:
+            _cleanup_installer(temporary)
     return defender

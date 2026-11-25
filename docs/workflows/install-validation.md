@@ -24,8 +24,8 @@ Android 按 ABI 分包，在 CI 候选包阶段用 DEFLATE 级别 9 重压已压
 
 | 平台 | 验证位置与检查 |
 | --- | --- |
-| Windows x64 / ARM64 | 生成并扫描 EXE；使用含中文与空格的自定义目录验证实际安装、登记位置、服务注册、普通用户代理/TUN、卸载及用户文件保留。更新改动按需检查安装闸门及写入失败回滚；GUI 和服务异常退出归扩展测试。PE 图标、扫描版本和逐文件 SHA256 进入收据。 |
-| macOS Intel / Apple Silicon | 生成 DMG；核对版本、架构、资源及 ad-hoc 签名，并验证安装后代理/TUN；窗口和界面重建归扩展测试。界面辅助包使用独立身份及 `LSUIElement`；没有 Developer ID 与 Apple 公证。 |
+| Windows x64 / ARM64 | 生成并扫描 EXE；在 Program Files 下含中文与空格的自定义目录验证实际安装、PATH 中的 `cor`、服务注册、普通用户代理/TUN、卸载后 PATH 恢复及用户文件保留。更新专项同时检查 PATH 去重、安装闸门及写入失败回滚；GUI 和服务异常退出归扩展测试。PE 图标、扫描版本和逐文件 SHA256 进入收据。 |
+| macOS Intel / Apple Silicon | 生成 DMG；核对版本、架构、资源及 ad-hoc 签名，并验证安装后代理/TUN。在隔离用户目录启动应用，检查新的 zsh 登录 shell 通过 PATH 调用 `cor`、找到包内资源和桌面后台。窗口和界面重建归扩展测试。界面辅助包使用独立身份及 `LSUIElement`；没有 Developer ID 与 Apple 公证。 |
 | Linux x64 / ARM64 | 同一份 DEB 先在 Ubuntu 20.04 构建容器安装，再在 Ubuntu 22.04 原生 runner 验证安装后的代理/TUN及授权；GUI 归扩展测试。 |
 | Ubuntu 固定版本 x64 / ARM64 | [Ubuntu Compatibility](ubuntu-compatibility.md) 复验候选安装和代理/TUN。ARM64 和 20.04 x64 使用固定的 Ubuntu 容器。显式 x64 更新专项为 20.04 使用 5.4 GA 内核的云镜像。 |
 | Debian 12 / 13 x64 / ARM64 | [Debian Compatibility](debian-compatibility.md) 使用各版本固定的官方容器复验候选安装和代理/TUN。显式 x64 更新专项使用官方云镜像。 |

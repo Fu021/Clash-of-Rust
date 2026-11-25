@@ -80,6 +80,14 @@ pub static COMMANDS: &[Spec] = &[
     ),
     command!("version", help_describe_version, "version", 0, 0, ""),
     command!(
+        "agent guide",
+        help_describe_agent_guide,
+        "agent guide",
+        0,
+        0,
+        ""
+    ),
+    command!(
         "profile list",
         help_describe_profile_list,
         "profile list [--filter TEXT --all-users --output FILE]",
@@ -1025,7 +1033,14 @@ pub fn localized_help(prefix: &str, language: Language) -> String {
         let common = messages::help_common_commands(language);
         out += &format!("{usage}cor <{command}> [{options}]\n\n{common}\n");
         for path in [
-            "ui", "start", "stop", "restart", "status", "proxy", "diagnose",
+            "ui",
+            "start",
+            "stop",
+            "restart",
+            "status",
+            "proxy",
+            "diagnose",
+            "agent guide",
         ] {
             let spec = COMMANDS.iter().find(|spec| spec.path == path).unwrap();
             out += &format!(
@@ -1041,7 +1056,7 @@ pub fn localized_help(prefix: &str, language: Language) -> String {
             .filter(|path| {
                 ![
                     "ui", "start", "stop", "restart", "status", "proxy", "diagnose", "profile",
-                    "node",
+                    "node", "agent",
                 ]
                 .contains(path)
             })

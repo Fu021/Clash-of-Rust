@@ -2,7 +2,7 @@
 
 `cor` 是 Clash of Rust 的无界面命令行客户端，适用于 Windows、Linux 和 macOS。它复用桌面端的内核管理、配置事务、规则、检测和系统集成，不依赖 Slint、托盘或显示服务器。
 
-`cor ui` 提供首页、节点、连接详情、网络工具、设置和管理操作的[终端界面](cli/tui.md)，`cor ui --demo` 可离线预览。现有命令与 JSON 接口全部保留，与 TUI 同步维护；打开或退出界面不自行启停代理。
+在交互终端运行 `cor` 或 `cor ui` 打开[终端界面](cli/tui.md)，`cor ui --demo` 可离线预览。现有命令与 JSON 接口全部保留，与 TUI 同步维护；打开或退出界面不自行启停代理。
 
 ## 安装与快速开始
 
@@ -11,8 +11,12 @@
 | 系统 | 命令位置 |
 | --- | --- |
 | Ubuntu / Debian | 安装 DEB 后直接运行 `cor`（`/usr/bin/cor`）；自 0.6.6 起要求 Ubuntu 20.04+ |
-| Windows | 安装目录中的 `cor.exe`，例如 PowerShell：`& 'C:\Program Files\Clash of Rust\cor.exe' help`；按实际安装目录调整，或自行加入 PATH |
-| macOS | `/Applications/Clash of Rust.app/Contents/MacOS/cor`；也可自行为此文件建立 PATH 中的符号链接 |
+| Windows | 安装完成页默认勾选「将 cor 添加到 PATH」，重新打开终端后运行 `cor`。旧版升级会自动添加，后续升级保留已选偏好。 |
+| macOS | 将应用拖入「应用程序」后打开一次，再开一个登录终端运行 `cor`。 |
+
+Windows 将位于 Program Files 的安装目录附加到系统 PATH。卸载仅删除安装器添加的条目。安装到其他位置或未选此项时，使用实际安装目录中的 `cor.exe`。
+
+macOS 在 `/Applications` 或 `~/Applications` 中启动应用时，会静默为当前用户创建 `~/.local/share/clash-of-rust/bin/cor`，并在 zsh、bash、sh/ksh 或 fish 的启动文件追加一段 PATH 配置。已有的 `cor` 优先。若应用启动时能读到绝对路径形式的 `ZDOTDIR` 或 `XDG_CONFIG_HOME`，会使用对应的 zsh 或 fish 配置目录。也可直接执行应用包内的 `Contents/MacOS/cor`。移除应用时可同时删除该链接和以 `Clash of Rust cor` 标记的配置段。
 
 ```sh
 cor help profile add
@@ -37,7 +41,9 @@ GUI 已运行时，CLI 通过带随机密钥的本机接口操作同一内核。
 
 ## 帮助、脚本与输出
 
-默认 `cor help` 只列出日常启停、状态、代理、诊断及订阅/节点入口；`cor help all` 查看完整命令和通用选项。所有命令都支持 `--help`；`cor help profile`、`cor profile help` 和 `cor profile --help` 列出该组命令，节点组同样可用 `cor node help`。`profile import` 仍兼容原脚本，分组帮助优先展示同时支持 URL、文件和标准输入的 `profile add`。帮助与解析、补全来自同一份命令表。
+默认 `cor help` 列出常用操作和 Agent 指南入口。`cor help all` 查看完整命令和通用选项。所有命令都支持 `--help`；`cor help profile`、`cor profile help` 和 `cor profile --help` 列出该组命令，节点组同样可用 `cor node help`。`profile import` 仍兼容原脚本，分组帮助优先展示同时支持 URL、文件和标准输入的 `profile add`。帮助与解析、补全来自同一份命令表。
+
+`cor agent guide` 输出随程序提供的 Markdown 指南，包含版本核对、只读排障、网络变更与诊断脱敏，以及仓库和文档入口。命令离线可用，不启动后台。`--lang=en` 可输出英文，`--json` 和 `--jsonl` 的 `data.markdown` 提供同一份正文。
 
 当前源码的帮助支持简体中文和英文。全新安装及升级后如未保存语言偏好，按系统语言列表选择第一种支持的语言，无匹配时使用英文。`cor config set language en` 保存英文偏好，`zh-CN` 保存简体中文，`system` 恢复跟随系统。`cor --lang=en help` 仅覆盖本次语言。
 

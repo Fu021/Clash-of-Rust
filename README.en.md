@@ -75,7 +75,11 @@ Upgrades preserve subscriptions and settings. The Windows uninstaller keeps data
 
 ## Command Line
 
-Desktop installers include `cor`. Run `cor start` to start the backend, `cor ui` for the terminal interface, and `cor help` for available commands. On servers, run `cor proxy tun` to enable TUN. The first use may require system authorization.
+Desktop installers include `cor`. Run `cor` or `cor ui` in an interactive terminal to open the terminal interface, `cor start` to start the backend, and `cor help` for available commands. On servers, run `cor proxy tun` to enable TUN. The first use may require system authorization.
+
+On Windows, the installer selects **Add cor to PATH** by default. On macOS, drag the app into Applications and open it once. The app silently adds `cor` to your PATH. Open a new terminal to use it.
+
+When working with an AI agent, ask it to run `cor agent guide` first to read the bundled guide.
 
 ## Memory Usage
 

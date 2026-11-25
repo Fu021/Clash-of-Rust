@@ -1,3 +1,4 @@
+mod agent_guide;
 mod args;
 mod backend;
 mod commands;
@@ -53,7 +54,13 @@ fn main() {
     if clash_client_runtime::platform::autostart_helper_main() {
         return;
     }
-    let input: Vec<String> = std::env::args().skip(1).collect();
+    let mut input: Vec<String> = std::env::args().skip(1).collect();
+    if input.is_empty() {
+        use std::io::IsTerminal;
+        if std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
+            input.push("ui".into());
+        }
+    }
     let language = args::language_from_input(&input);
     let result = args::parse(input).and_then(|args| {
         if args.help {
@@ -62,6 +69,9 @@ fn main() {
                 .lock()
                 .write_all(args::localized_help(&args.path, args.language()).as_bytes())?;
             return Ok(());
+        }
+        if args.path == "agent guide" {
+            return agent_guide::print(&args);
         }
         users::prepare(&args)?;
         #[cfg(windows)]

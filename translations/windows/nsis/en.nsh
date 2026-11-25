@@ -4,6 +4,9 @@
 
 LangString InstallerLaunch ${LANG_ENGLISH} "Start Clash of Rust"
 LangString InstallerAddShortcuts ${LANG_ENGLISH} "Add shortcuts"
+LangString InstallerAddCliPath ${LANG_ENGLISH} "Add cor to PATH"
+LangString InstallerCliPathFailed ${LANG_ENGLISH} "Setup could not update PATH. You can run cor.exe directly from the installation folder."
+LangString InstallerRemoveCliPathFailed ${LANG_ENGLISH} "Could not remove the Clash of Rust entry from PATH. Check the installation and try again."
 LangString InstallerWriteFailed ${LANG_ENGLISH} "Setup could not write $InstallFile. Check whether the file is in use and verify disk space and write permissions."
 LangString InstallerLaunchFromStart ${LANG_ENGLISH} "Installation complete. Open Clash of Rust from the Start menu."
 LangString InstallerClientRunning ${LANG_ENGLISH} "Clash of Rust is running. Quit it and try again."

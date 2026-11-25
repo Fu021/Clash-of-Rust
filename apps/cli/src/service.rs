@@ -120,7 +120,7 @@ fn definition(args: &Args) -> Result<(PathBuf, String)> {
     #[cfg(target_os = "macos")]
     {
         let mut argv = vec![
-            exe.to_string_lossy().into_owned(),
+            exe.canonicalize()?.to_string_lossy().into_owned(),
             "run".into(),
             "--data-dir".into(),
             data.to_string_lossy().into_owned(),

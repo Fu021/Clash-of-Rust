@@ -73,6 +73,9 @@ VIProductVersion "${APP_NUMERIC_VERSION}"
   !define MUI_FINISHPAGE_SHOWREADME ""
   !define MUI_FINISHPAGE_SHOWREADME_TEXT "$(InstallerAddShortcuts)"
   !define MUI_FINISHPAGE_SHOWREADME_FUNCTION CreateShortcuts
+  !define MUI_FINISHPAGE_NOREBOOTSUPPORT
+  !define MUI_PAGE_CUSTOMFUNCTION_SHOW ShowCliPathOption
+  !define MUI_PAGE_CUSTOMFUNCTION_LEAVE SaveCliPathOption
 !insertmacro MUI_PAGE_FINISH
 UninstPage custom un.DataOptions un.DataOptionsLeave
 !insertmacro MUI_UNPAGE_CONFIRM
@@ -96,6 +99,8 @@ Var InstallFile
 Var InstallTarget
 Var InstallWin32Error
 Var InstallFailureCode
+Var CliPathCheckbox
+Var CliPathSelected
 
 !include /CHARSET=UTF8 "${INSTALLER_LANGUAGES}${COMPILER_PATH_SEPARATOR}en.nsh"
 !include /CHARSET=UTF8 "${INSTALLER_LANGUAGES}${COMPILER_PATH_SEPARATOR}zh-CN.nsh"
@@ -232,6 +237,38 @@ Function LaunchClient
   ${EndIf}
 FunctionEnd
 
+Function ShowCliPathOption
+  ${NSD_CreateCheckbox} 120u 130u 195u 14u "$(InstallerAddCliPath)"
+  Pop $CliPathCheckbox
+  SetCtlColors $CliPathCheckbox "${MUI_TEXTCOLOR}" "${MUI_BGCOLOR}"
+  ${NSD_SetState} $CliPathCheckbox $CliPathSelected
+FunctionEnd
+
+Function SaveCliPathOption
+  ${NSD_GetState} $CliPathCheckbox $CliPathSelected
+  Call ApplyCliPathOption
+FunctionEnd
+
+Function ApplyCliPathOption
+  ${If} $CliPathSelected == ${BST_CHECKED}
+    StrCpy $1 "--windows-cli-path-add"
+  ${Else}
+    StrCpy $1 "--windows-cli-path-remove"
+  ${EndIf}
+  ClearErrors
+  StrCpy $ResultCode 1
+  ExecWait '"$INSTDIR\clash-tun-launcher.exe" $1' $ResultCode
+  ${IfNot} ${Errors}
+  ${AndIf} $ResultCode == 0
+    WriteRegDWORD ${PRODUCT_HIVE} "${PRODUCT_KEY}" "CliPathEnabled" $CliPathSelected
+    Return
+  ${EndIf}
+  DetailPrint "$(InstallerCliPathFailed)"
+  IfSilent path_done
+  MessageBox MB_OK|MB_ICONEXCLAMATION "$(InstallerCliPathFailed)"
+  path_done:
+FunctionEnd
+
 !macro CheckRunning PREFIX
   System::Call 'kernel32::OpenMutexW(i 0x100000, i 0, w "${APP_MUTEX}") p.r0'
   ${If} $0 != 0
@@ -268,6 +305,11 @@ Function .onInit
   StrCpy $UpdateMode 0
   StrCpy $UpdateBackup 0
   StrCpy $UpdateUiBackup 0
+  ClearErrors
+  ReadRegDWORD $CliPathSelected ${PRODUCT_HIVE} "${PRODUCT_KEY}" "CliPathEnabled"
+  ${If} ${Errors}
+    StrCpy $CliPathSelected ${BST_CHECKED}
+  ${EndIf}
   ${GetParameters} $0
   ClearErrors
   ${GetOptions} $0 "/UPDATE" $1
@@ -546,6 +588,10 @@ Section "Clash of Rust" MainSection
     StrCpy $UpdateBackup 0
     StrCpy $UpdateUiBackup 0
   ${EndIf}
+  IfSilent apply_silent_cli_path cli_path_ready
+  apply_silent_cli_path:
+    Call ApplyCliPathOption
+  cli_path_ready:
   SetErrorLevel 0
 SectionEnd
 
@@ -687,6 +733,21 @@ Section "Uninstall"
         Abort
       ${EndIf}
     ${EndIf}
+  ReadRegStr $0 ${PRODUCT_HIVE} "${PRODUCT_KEY}" "CliPathOwned"
+  ${If} $0 != ""
+    ClearErrors
+    StrCpy $0 1
+    ExecWait '"$INSTDIR\clash-tun-launcher.exe" --windows-cli-path-remove' $0
+    ${If} ${Errors}
+    ${OrIf} $0 != 0
+      IfSilent cli_path_error
+      MessageBox MB_OK|MB_ICONSTOP "$(InstallerRemoveCliPathFailed)"
+      cli_path_error:
+      DetailPrint "$(InstallerRemoveCliPathFailed)"
+      SetErrorLevel 6
+      Abort
+    ${EndIf}
+  ${EndIf}
   ClearErrors
   Delete "$INSTDIR\clash-of-rust.exe"
   IfErrors uninstall_locked

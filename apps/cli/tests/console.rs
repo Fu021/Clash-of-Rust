@@ -9,6 +9,7 @@ fn cor() -> Command {
 fn help_version_completion_and_usage_do_not_initialize_a_backend() {
     let root = tempfile::tempdir().unwrap();
     for arguments in [
+        vec![],
         vec!["help"],
         vec!["help", "rule", "add"],
         vec!["node", "help"],
@@ -59,6 +60,51 @@ fn help_uses_the_saved_language_and_accepts_a_read_only_override() {
     }
     assert_eq!(std::fs::read_to_string(settings).unwrap(), contents);
     assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 1);
+}
+
+#[test]
+fn agent_guide_is_discoverable_localized_and_available_offline() {
+    let root = tempfile::tempdir().unwrap();
+    let data = root.path().join("unused");
+    let run = |arguments: &[&str]| {
+        let result = cor()
+            .args(arguments)
+            .arg("--resources")
+            .arg(root.path().join("missing-resources"))
+            .env("CLASH_OF_RUST_DATA_DIR", &data)
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "{:?}", result.stderr);
+        assert!(result.stderr.is_empty(), "{:?}", result.stderr);
+        assert!(!data.exists());
+        String::from_utf8(result.stdout).unwrap()
+    };
+
+    for (language, heading) in [("en", "Agent Guide"), ("zh-CN", "Agent 指南")] {
+        for arguments in [
+            vec!["help"],
+            vec!["help", "all"],
+            vec!["agent", "guide", "--help"],
+        ] {
+            let arguments: Vec<_> = [vec!["--lang", language], arguments].concat();
+            assert!(run(&arguments).contains("agent guide"));
+        }
+        let markdown = run(&["--lang", language, "agent", "guide"]);
+        assert!(markdown.starts_with(&format!("# Clash of Rust · {heading}\n")));
+        assert!(
+            markdown.contains("https://github.com/Fu021/Clash-of-Rust/blob/main/docs/README.md")
+        );
+        for format in ["--json", "--jsonl"] {
+            let json = run(&["agent", "guide", format, "--lang", language]);
+            let envelope: serde_json::Value = serde_json::from_str(&json).unwrap();
+            assert_eq!(envelope["schema"], 1);
+            assert_eq!(envelope["command"], "agent guide");
+            assert_eq!(envelope["data"]["markdown"], markdown);
+        }
+    }
+    let completion = cor().args(["__complete", "agent", "g"]).output().unwrap();
+    assert!(completion.status.success());
+    assert_eq!(completion.stdout, b"guide\n");
 }
 
 #[tokio::test]

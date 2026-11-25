@@ -132,7 +132,11 @@ fn known_folder_path(folder: &windows_sys::core::GUID) -> Result<PathBuf> {
 }
 
 pub fn installed_directory() -> Result<PathBuf> {
-    Ok(known_folder_path(&FOLDERID_ProgramFiles)?.join("Clash of Rust Network"))
+    Ok(program_files()?.join("Clash of Rust Network"))
+}
+
+pub(super) fn program_files() -> Result<PathBuf> {
+    known_folder_path(&FOLDERID_ProgramFiles)
 }
 
 pub fn protect(path: &Path, readable: bool) -> Result<()> {

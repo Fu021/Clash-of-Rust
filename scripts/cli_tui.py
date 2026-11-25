@@ -151,6 +151,11 @@ def verify(console, resources, report):
     report.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='cor-tui-check-') as temporary:
         data = Path(temporary)/'absent'
+        environment = dict(os.environ, CLASH_OF_RUST_DATA_DIR=str(data))
+        with Session([str(console)], env=environment) as terminal:
+            terminal.wait('CLASH OF RUST')
+        if data.exists():
+            raise RuntimeError('Opening the default TUI created a backend')
         command = [str(console), '--lang=zh-CN', '--data-dir', str(data), '--resources', str(resources), 'ui']
         rejected = subprocess.run(command, stdin=subprocess.DEVNULL, capture_output=True,
                                   text=True, timeout=10)

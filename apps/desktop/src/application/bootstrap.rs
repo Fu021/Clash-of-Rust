@@ -151,6 +151,8 @@ pub(crate) fn run() -> anyhow::Result<()> {
     let tray_startup = std::sync::Mutex::new(Some(tray::Startup::new(tray_timeout, language)));
     #[cfg(any(windows, target_os = "linux"))]
     std::thread::spawn(platform::migrate_autostart);
+    #[cfg(target_os = "macos")]
+    std::thread::spawn(mac_cli_path::install);
     let state = startup_store()
         .map(|store| window_state::State::load(&store))
         .unwrap_or_default();

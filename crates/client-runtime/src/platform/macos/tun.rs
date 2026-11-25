@@ -86,6 +86,7 @@ impl Session {
     }
     pub fn command(&self, controller: u16, mixed: u16) -> Result<tokio::process::Command> {
         let launcher = std::env::current_exe()?
+            .canonicalize()?
             .parent()
             .context("无法定位 TUN 助手")?
             .join("clash-tun-launcher");
@@ -189,7 +190,7 @@ fn check_user_file(path: &Path, uid: u32, directory: bool) -> Result<()> {
     Ok(())
 }
 pub(crate) fn core_path() -> Result<(PathBuf, String)> {
-    let exe = std::env::current_exe()?;
+    let exe = std::env::current_exe()?.canonicalize()?;
     let parent = exe.parent().context("TUN 助手路径无效")?;
     let sibling = parent.join("resources");
     let resources = if sibling.is_dir() {

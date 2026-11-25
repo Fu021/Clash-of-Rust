@@ -4,6 +4,9 @@
 
 LangString InstallerLaunch ${LANG_SIMPCHINESE} "立即启动 Clash of Rust"
 LangString InstallerAddShortcuts ${LANG_SIMPCHINESE} "添加快捷方式"
+LangString InstallerAddCliPath ${LANG_SIMPCHINESE} "将 cor 添加到 PATH"
+LangString InstallerCliPathFailed ${LANG_SIMPCHINESE} "未能更新 PATH。可以从安装目录直接运行 cor.exe。"
+LangString InstallerRemoveCliPathFailed ${LANG_SIMPCHINESE} "无法从 PATH 移除 Clash of Rust。请检查安装后重试。"
 LangString InstallerWriteFailed ${LANG_SIMPCHINESE} "安装未完成：$InstallFile 无法写入。请检查文件占用、磁盘空间与写入权限后重试。"
 LangString InstallerLaunchFromStart ${LANG_SIMPCHINESE} "安装已完成，请从开始菜单启动 Clash of Rust。"
 LangString InstallerClientRunning ${LANG_SIMPCHINESE} "Clash of Rust 正在运行。请先退出程序，再重新运行安装或卸载。"

@@ -10,6 +10,9 @@ mod format;
 mod intents;
 mod interaction;
 mod logs;
+#[cfg(any(target_os = "macos", all(unix, test)))]
+#[path = "../platform/macos/cli_path.rs"]
+mod mac_cli_path;
 #[cfg(target_os = "macos")]
 #[path = "../platform/macos/desktop.rs"]
 mod mac_desktop;

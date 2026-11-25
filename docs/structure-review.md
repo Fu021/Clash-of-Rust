@@ -69,7 +69,7 @@ Clash-of-Rust/
 │   ├── languages.rs              支持语言、菜单名称与系统语言匹配规则
 │   ├── compile_catalog.rs        Rust 目录校验和消息函数生成
 │   ├── shared/                   跨平台业务的 Rust 消息
-│   ├── cli/                      CLI 与 TUI 的 Rust 消息
+│   ├── cli/                      CLI 与 TUI 的 Rust 消息及内置 Agent 指南
 │   ├── runtime/                  桌面与 CLI 共用运行库的 Rust 消息
 │   ├── desktop/
 │   │   ├── rust/                 桌面宿主的 Rust 消息
