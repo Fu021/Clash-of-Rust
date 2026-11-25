@@ -110,7 +110,7 @@ Tumbleweed 在来宾关闭预设仓库，使用与云镜像日期一致的签名
 
 发布范围包含 Arch Linux x86_64 时，Release 将提供原生二进制包。首次安装时从包含该包的版本下载 `Clash-of-Rust-<版本>-linux-x86_64.pkg.tar.zst` 及 `.sha256`，核对摘要后执行 `sudo pacman -U ./Clash-of-Rust-<版本>-linux-x86_64.pkg.tar.zst`，其中 `<版本>` 替换为实际版本。包名是 `clash-of-rust`，配方保留 `/opt/clash-of-rust`、随包内核和固定的 polkit 助手路径，并写入 `pacman-release` 标识。
 
-Arch 工作流使用 CI 的 x64 DEB 在 Arch 环境内重封装，检查安装后的包身份、实际终端更新助手、基础系统代理和 TUN。基础验收使用按摘要固定的 [Arch 官方 OCI 镜像](https://github.com/archlinux/archlinux-docker)，显式跨版本更新使用官方 Cloud 20261115.625457 来宾。两条路径均校验实际装过的原包与回执再上传。记录作业绑定实际执行验收的 attempt 与归档摘要，发布阶段用同一字节生成校验文件并加入 Release。应用内更新见[版本与更新通道](versions.md#版本与更新通道)。
+Arch 工作流使用 CI 的 x64 DEB 在 Arch 环境内重封装，检查安装后的包身份、实际终端更新助手、基础系统代理和 TUN。基础验收使用按摘要固定的 [Arch 官方 OCI 镜像](https://github.com/archlinux/archlinux-docker)，显式跨版本更新使用官方 Cloud 20261115.625457 来宾。Arch 滚动发行版的镜像可能提供 `VERSION_ID`，也可能省略；验收核对系统身份和架构，并在报告中保留实际版本标识。两条路径均校验实际装过的原包与回执再上传。记录作业绑定实际执行验收的 attempt 与归档摘要，发布阶段用同一字节生成校验文件并加入 Release。应用内更新见[版本与更新通道](versions.md#版本与更新通道)。
 
 ### 历史兼容证据
 

@@ -10233,6 +10233,15 @@ success="$1"
         self.assertEqual(len(release.CI_JOBS), 13)
         self.assertIn('Prepare Android Maven dependencies', release.CI_JOBS)
 
+    def test_compatibility_identity_accepts_arch_rolling_version_without_weakening_other_checks(self):
+        matches = release_package.compatibility_identity_matches
+        self.assertTrue(matches(('arch', '', 'x64'), ('arch', '', 'x64')))
+        self.assertTrue(matches(('arch', '20261108.0.623074', 'x64'), ('arch', '', 'x64')))
+        self.assertFalse(matches(('arch', '20261108.0.623074', 'arm64'), ('arch', '', 'x64')))
+        self.assertFalse(matches(('debian', '13', 'x64'), ('arch', '', 'x64')))
+        self.assertFalse(matches(('ubuntu', '24.04', 'x64'), ('ubuntu', '22.04', 'x64')))
+        self.assertFalse(matches(('ubuntu', '24.04', 'x64'), ('ubuntu', '', 'x64')))
+
     def test_installed_candidate_receipt_binds_runtime_and_inputs_only_after_success(self):
         source = 'a' * 40
         with tempfile.TemporaryDirectory() as temporary:

@@ -425,6 +425,12 @@ def native_package_tests(deb, receipt, binary):
         })
 
 
+def compatibility_identity_matches(actual, expected):
+    distribution, version, arch = expected
+    return (actual[0] == distribution and actual[2] == arch
+            and (actual[1] == version or (distribution == 'arch' and version == '')))
+
+
 def run_compatibility(distribution, version, arch, *, prepare_desktop_login=False):
     from ci_test_policy import extended_tests
 
@@ -434,7 +440,7 @@ def run_compatibility(distribution, version, arch, *, prepare_desktop_login=Fals
     report.unlink(missing_ok=True)
     release = platform.freedesktop_os_release()
     actual = (release.get('ID'), release.get('VERSION_ID', ''), host_arch())
-    if actual != (distribution, version, arch):
+    if not compatibility_identity_matches(actual, (distribution, version, arch)):
         raise ValueError(f'Compatibility test expected {(distribution, version, arch)}, got {actual}')
     if prepare_desktop_login and (distribution != 'ubuntu' or os.environ.get('COR_LINUX_GUEST') != 'true'):
         raise RuntimeError('Desktop login preparation requires a disposable Ubuntu compatibility VM')
