@@ -104,16 +104,20 @@ export component FindingBlocks inherits Rectangle {
     in property <length> detail-touch-height: 0px;
     callback show-details(string);
     property <int> columns: root.width < 680px * Theme.text-scale ? 1 : root.width < 1040px * Theme.text-scale ? 2 : 3;
+    property <int> card-count: min(root.items.length, 5);
     min-width: 0px; preferred-width: 0px; horizontal-stretch: 1; vertical-stretch: 0;
     height: blocks.preferred-height;
-    blocks := GridLayout {
+    blocks := HorizontalLayout {
         x: 0px; width: root.width;
-        spacing: Theme.page-gap;
-        for index in min(root.items.length, 5): FindingBlock {
-            col: mod(index, root.columns); row: floor(index / root.columns);
-            section: root.items[index];
-            title-size: root.title-size; detail-size: root.detail-size; caption-size: root.caption-size; detail-touch-height: root.detail-touch-height;
-            show-details => { root.show-details(root.items[index].id); }
+        spacing: Theme.page-gap; cross-axis-alignment: start;
+        for column in min(root.columns, root.card-count): VerticalLayout {
+            min-width: 0px; preferred-width: 0px; horizontal-stretch: 1;
+            height: self.preferred-height; spacing: Theme.page-gap;
+            for row in ceil((root.card-count - column) / root.columns): FindingBlock {
+                section: root.items[row * root.columns + column];
+                title-size: root.title-size; detail-size: root.detail-size; caption-size: root.caption-size; detail-touch-height: root.detail-touch-height;
+                show-details => { root.show-details(self.section.id); }
+            }
         }
     }
 }

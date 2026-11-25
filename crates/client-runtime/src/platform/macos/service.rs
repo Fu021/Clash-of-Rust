@@ -5,7 +5,7 @@ use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
-    io::{BufRead, BufReader, Read, Write},
+    io::{self, BufRead, BufReader, Read, Write},
     os::unix::{
         fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
         net::{UnixListener, UnixStream},
@@ -300,6 +300,30 @@ fn start_tun_session(command: &mut Command, timeout: Duration) -> Result<Child> 
 pub fn protection_dns(enabled: bool) -> Result<()> {
     ensure!(!enabled, "开启保护 DNS 必须指定本机监听端口");
     protection_dns_at(None)
+}
+
+pub fn recover_startup_protection_dns() -> Result<()> {
+    wait_for_startup_dns(|| protection_dns_at(None), Duration::from_secs(6))
+}
+
+fn wait_for_startup_dns(mut recover: impl FnMut() -> Result<()>, grace: Duration) -> Result<()> {
+    let deadline = Instant::now() + grace;
+    loop {
+        let result = recover();
+        let waiting_for_socket = result.as_ref().is_err_and(|error| {
+            error.downcast_ref::<io::Error>().is_some_and(|error| {
+                matches!(
+                    error.kind(),
+                    io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
+                )
+            })
+        });
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if !waiting_for_socket || remaining.is_zero() {
+            return result;
+        }
+        std::thread::sleep(remaining.min(Duration::from_millis(100)));
+    }
 }
 
 pub fn protection_dns_at(port: Option<u16>) -> Result<()> {
@@ -796,6 +820,45 @@ pub fn serve(uid: u32) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn startup_dns_waits_for_the_helper_to_recover_the_lease_before_listening() {
+        for kind in [io::ErrorKind::NotFound, io::ErrorKind::ConnectionRefused] {
+            let mut attempts = 0;
+            wait_for_startup_dns(
+                || {
+                    attempts += 1;
+                    if attempts == 1 {
+                        return Err(io::Error::from(kind)).context("网络助手尚未启动");
+                    }
+                    Ok(())
+                },
+                Duration::from_secs(1),
+            )
+            .unwrap();
+            assert_eq!(attempts, 2);
+        }
+    }
+
+    #[test]
+    fn startup_dns_reports_expired_socket_waits_and_real_restore_failures() {
+        for (kind, grace) in [
+            (io::ErrorKind::ConnectionRefused, Duration::ZERO),
+            (io::ErrorKind::PermissionDenied, Duration::from_secs(1)),
+        ] {
+            let mut attempts = 0;
+            let error = wait_for_startup_dns(
+                || {
+                    attempts += 1;
+                    Err(io::Error::from(kind)).context("DNS 恢复失败")
+                },
+                grace,
+            )
+            .unwrap_err();
+            assert_eq!(attempts, 1);
+            assert_eq!(error.downcast_ref::<io::Error>().unwrap().kind(), kind);
+        }
+    }
 
     #[test]
     fn tun_session_waits_for_the_child_receipt_not_just_a_successful_spawn() {

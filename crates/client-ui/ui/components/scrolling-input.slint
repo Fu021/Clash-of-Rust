@@ -1,0 +1,33 @@
+export component ScrollingInput inherits Flickable {
+    in-out property <string> text <=> input.text;
+    in property <bool> enabled: true;
+    in property <string> input-label;
+    in property <InputType> input-type <=> input.input-type;
+    in property <length> font-size <=> input.font-size;
+    in property <brush> color <=> input.color;
+    in property <color> selection-background-color <=> input.selection-background-color;
+    in property <color> selection-foreground-color <=> input.selection-foreground-color;
+    out property <bool> has-focus: input.has-focus;
+    out property <string> preedit-text: input.preedit-text;
+    callback edited(string);
+    callback accepted();
+
+    preferred-height: input.preferred-height;
+    forward-focus: input;
+    interactive: root.enabled;
+    mouse-drag-pan-enabled: false;
+    content-width: max(root.width, input.preferred-width + input.text-cursor-width);
+    content-height: root.height;
+    property <length> left-limit: root.width - root.content-width;
+    changed left-limit => { root.content-x = clamp(root.content-x, root.left-limit, 0px); }
+
+    input := TextInput {
+        accessible-label: root.input-label;
+        enabled: root.enabled;
+        width: root.content-width;
+        height: root.height;
+        vertical-alignment: center;
+        edited => { root.edited(self.text); }
+        accepted => { root.accepted(); }
+    }
+}

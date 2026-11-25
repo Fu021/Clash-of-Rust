@@ -142,6 +142,7 @@ fn report_cards_open_only_the_selected_section_at_representative_sizes() {
         });
     }
     rows[1].block_items += 15;
+    rows[1].value = "The selected route is responding.\nDNS uses the protected route.\nThe browser probe is ready.\n固定演示结果。".into();
     let reports = Rc::new(slint::VecModel::from(rows));
     probe.set_reports(reports.clone().into());
     let targets = Rc::new(RefCell::new(BTreeMap::<String, Vec<f32>>::new()));
@@ -162,18 +163,41 @@ fn report_cards_open_only_the_selected_section_at_representative_sizes() {
         geometry.set_revision(geometry.get_revision().wrapping_add(1));
         frame(&adapter, &clock, width, height);
     };
-    for (width, height, scale) in [
-        (360, 640, 1.),
-        (360, 640, 1.3),
-        (393, 852, 1.),
-        (800, 360, 1.),
-        (800, 1280, 1.),
-        (1280, 800, 1.),
+    for (width, height, scale, columns) in [
+        (360, 640, 1., 1),
+        (360, 640, 1.3, 1),
+        (393, 852, 1., 1),
+        (800, 360, 1., 2),
+        (800, 1280, 1., 2),
+        (800, 1280, 1.3, 1),
+        (1280, 800, 1., 3),
     ] {
         adapter.set_size(slint::PhysicalSize::new(width, height));
         probe.set_text_scale(scale);
         probe.set_section("".into());
         render(width, height);
+        {
+            let bounds = targets.borrow();
+            let cards: Vec<_> = (0..5)
+                .map(|index| {
+                    let item = reports.row_data(index).unwrap();
+                    &bounds[&format!("claude-card:{}", item.id)]
+                })
+                .collect();
+            for (index, card) in cards.iter().enumerate() {
+                assert!(card[2] > 0. && card[3] > 0. && card[0] + card[2] <= width as f32);
+                if index >= columns {
+                    let above = cards[index - columns];
+                    assert!((card[0] - above[0]).abs() <= 1.);
+                    assert!((card[1] - above[1] - above[3] - 12.).abs() <= 1.);
+                } else if index > 0 {
+                    assert!((card[1] - cards[0][1]).abs() <= 1.);
+                    assert!(
+                        (card[0] - cards[index - 1][0] - cards[index - 1][2] - 12.).abs() <= 1.
+                    );
+                }
+            }
+        }
         let button = targets.borrow()["claude-block:实时保护与异常拦截"].clone();
         assert!(button[3] >= 48. && button[0] + button[2] <= width as f32);
         let card = targets.borrow()["claude-card:实时保护与异常拦截"].clone();

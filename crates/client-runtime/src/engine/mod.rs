@@ -285,7 +285,8 @@ impl Engine {
         }
         let mut settings = settings?;
         #[cfg(target_os = "macos")]
-        platform::macos::service::protection_dns(false).context("恢复上次运行的系统 DNS 失败")?;
+        platform::macos::service::recover_startup_protection_dns()
+            .context("恢复上次运行的系统 DNS 失败")?;
         let mut profiles = store.profiles()?;
         if let Some(active) = settings.active_profile.as_deref() {
             ensure!(

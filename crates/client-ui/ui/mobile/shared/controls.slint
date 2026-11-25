@@ -1,6 +1,7 @@
 import { Motion, Entrance, ProgressTrack, CopyFeedback, NoticeCountdown } from "../../components/motion.slint";
 import { Chevron } from "../../components/controls.slint";
 import { GeometryTarget } from "../../components/geometry.slint";
+import { ScrollingInput } from "../../components/scrolling-input.slint";
 import { RuleDragHandle } from "../../components/rule-drag.slint";
 import { MobileTypography } from "typography.slint";
 import { Theme } from "../../theme/palette.slint";
@@ -351,11 +352,12 @@ export component MField inherits Rectangle {
     background: Theme.surface; border-radius: 6px; border-width: 1px;
     border-color: input.has-focus ? Theme.accent : Theme.line;
     animate border-color, background { duration: Motion.fast; enabled: Motion.active; }
-    input := TextInput { x: 12px; width: parent.width - 24px; height: parent.height;
+    input := ScrollingInput { x: 12px; width: max(0px, parent.width - 24px); height: parent.height;
+        input-label: root.placeholder;
         enabled: root.enabled && !MobileView.modal && !MobileView.notice-modal;
-        text <=> root.text; input-type: root.secret ? InputType.password : InputType.text; font-size: MobileTypography.font-size(16); color: Theme.ink; single-line: true; vertical-alignment: center;
+        text <=> root.text; input-type: root.secret ? InputType.password : InputType.text; font-size: MobileTypography.font-size(16); color: Theme.ink;
         selection-background-color: Theme.primary; selection-foreground-color: #ffffff;
-        edited => { root.edited(self.text); }
+        edited(value) => { root.edited(value); }
     }
     MSmall { x: 12px; width: parent.width - 24px; height: parent.height;
         text: root.placeholder-visible ? root.placeholder : "";

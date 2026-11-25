@@ -2,6 +2,7 @@ import { Motion, Entrance, ProgressTrack } from "motion.slint";
 import { Theme } from "../theme/palette.slint";
 import { ControlAccess } from "control-access.slint";
 import { GeometryTarget, UiGeometry } from "geometry.slint";
+import { ScrollingInput } from "scrolling-input.slint";
 
 // Reset on navigation, not on each model refresh. Clamp after content shrinks
 // (including a shorter detail) so a previous offset cannot hide the new body.
@@ -309,21 +310,20 @@ export component Field inherits Rectangle {
     border-color: input.has-focus ? Theme.accent : Theme.line;
     animate border-color, background { duration: Motion.fast; enabled: Motion.active; }
     border-width: root.borderless ? 0px : 1px;
-    input := TextInput {
-        accessible-label: root.placeholder;
+    input := ScrollingInput {
+        input-label: root.placeholder;
         x: 12px;
         y: (parent.height + placeholder-label.font-metrics.cap-height) / 2 - placeholder-label.font-metrics.ascent;
-        width: parent.width - 24px;
+        width: max(0px, parent.width - 24px);
         height: self.preferred-height;
         text <=> root.text;
         enabled: root.enabled && (!ControlAccess.modal-blocked() || root.modal-control) && !ControlAccess.notice-blocked();
-        single-line: true;
         input-type: root.secret ? InputType.password : InputType.text;
         font-size: Theme.body-size;
         color: Theme.ink;
         selection-background-color: Theme.primary;
         selection-foreground-color: #ffffff;
-        edited => { root.edited(self.text); }
+        edited(value) => { root.edited(value); }
         accepted => { root.accepted(); }
     }
     placeholder-label := Caption {

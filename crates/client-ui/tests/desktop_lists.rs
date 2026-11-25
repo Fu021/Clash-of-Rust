@@ -647,8 +647,14 @@ fn desktop_drag_starts_immediately_and_respects_busy_state() {
 }
 
 #[test]
-fn desktop_input_composition_hides_placeholder() {
-    let (adapter, _clock) = headless(320, 160);
+fn desktop_input_composition_and_horizontal_scroll() {
+    use i_slint_core::{
+        accessibility::{AccessibleStringProperty, accessible_descendents},
+        items::ItemRc,
+        window::WindowInner,
+    };
+
+    let (adapter, clock) = headless(320, 160);
     let field = DesktopInputProbe::new().unwrap();
     field.show().unwrap();
     field.invoke_focus_field();
@@ -680,9 +686,43 @@ fn desktop_input_composition_hides_placeholder() {
     composition("", "拼音 🙂", true);
     assert_eq!(field.get_text(), "拼音 🙂");
     assert!(!field.get_placeholder());
+
+    let tree = ItemRc::new_root(WindowInner::from_pub(field.window()).component());
+    let input = accessible_descendents(&tree)
+        .find(|item| {
+            item.accessible_string_property(AccessibleStringProperty::Label)
+                .is_some_and(|label| label == "Desktop placeholder")
+        })
+        .unwrap();
+    let origin_x = || input.map_to_window(Default::default()).x;
+    let press = |key: slint::platform::Key| {
+        field
+            .window()
+            .dispatch_event(WindowEvent::KeyPressed { text: key.into() });
+    };
+    let left = origin_x();
+    let suffix = format!(" https://example.test/{}終🦀", "a".repeat(200));
+    composition("", &suffix, true);
+    let draft = format!("拼音 🙂{suffix}");
+    assert_eq!(field.get_text(), draft);
+    assert!(origin_x() < left - 300.);
+    press(slint::platform::Key::Home);
+    assert_eq!(origin_x(), left);
+    field.window().dispatch_event(WindowEvent::PointerScrolled {
+        position: LogicalPosition::new(100., 95.),
+        delta_x: -160.,
+        delta_y: 0.,
+    });
+    advance(&clock, Duration::from_millis(300));
+    assert!(origin_x() < left - 100.);
+    assert_eq!(field.get_text(), draft);
+    press(slint::platform::Key::End);
+    press(slint::platform::Key::Backspace);
+    assert_eq!(field.get_text(), draft.strip_suffix('🦀').unwrap());
     field.set_text("".into());
     frame(&adapter, 320, 160);
     assert!(field.get_placeholder());
+    assert_eq!(origin_x(), left);
     field.hide().unwrap();
 }
 
