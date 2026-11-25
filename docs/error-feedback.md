@@ -96,8 +96,8 @@ TUI 读取失败保留旧快照并明确标为参考数据，实际读回恢复�
 | 桌面 `application/claude.rs` | 会话、网络检测、浏览器、剪贴板、报告导入/导出失败进入可恢复入口；风险、未知及不完整扫描仍留在报告中。 |
 | 桌面 `application/bindings.rs`、`bootstrap.rs`、`startup.rs` | 窗口初始化/重开、进程协议、托盘尝试和后台启动；没有可用窗口时保留启动日志与 CLI 离线诊断。 |
 | 桌面 `application/network_watch.rs`、`overview.rs`、`connection_lookup.rs` | 接管警告持续显示；服务探测、IP/地址信息失败留在结果或未知状态中，不产生逐项错误弹窗。 |
-| Android `native/src/android.rs` | 用户操作、异步更新/Geo/测速、原生回调、保护切换与内核运行状态；可恢复和严重等级同步到原生系统通知及最近事件。 |
-| Android `native/src/application_routing.rs`、`application_policies.rs` | 应用目录、选择、规则草稿及目标失效；权限/目录加载失败可恢复，目标失效保留规则拦截和可恢复提醒。 |
+| Android [`android.rs`](../apps/android/native/src/android.rs) | 用户操作、异步更新、Geo、测速、原生回调、保护切换与内核运行状态。可恢复和严重等级同步到原生系统通知及最近事件。 |
+| Android [`application_routing.rs`](../apps/android/native/src/application_routing.rs)、[`application_policies.rs`](../apps/android/native/src/application_policies.rs) | 应用目录、选择、规则草稿及目标失效。权限或目录加载失败可恢复，目标失效保留规则拦截和可恢复提醒。 |
 | Android `MainActivity`、`UpdateInstaller`、`TunnelService` | 文件、外链、APK 安装授权/身份校验与 VPN 建立/恢复；Android 系统安装界面的结果不冒充本程序已确认安装成功。 |
 | Android `IncidentNotifications`、`ProtectionRuntime` | 系统通知不可用不抹掉界面错误；保护异常保留专用健康状态、观察与拦截记录。 |
 | `client-runtime/update/install.rs`、平台安装模块、NSIS | 安装资格、授权、交接、目标写入及重启；安装器退出码和有效的文件失败记录共同解释结果，缺失信息保持未知。 |

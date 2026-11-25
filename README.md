@@ -75,11 +75,9 @@ Windows 运行安装程序。Debian/Ubuntu 运行 `sudo apt install ./安装包�
 
 ## 命令行
 
-桌面安装包均附带 `cor`。在交互终端运行 `cor` 或 `cor ui` 打开终端界面，运行 `cor start` 启动后台，`cor help` 查看命令。在服务器上可运行 `cor proxy tun` 启用 TUN，首次开启可能需要系统授权。
+桌面安装包均附带 `cor`。运行 `cor ui` 打开终端界面，`cor start` 启动后台，`cor help` 查看命令。在服务器上可运行 `cor proxy tun` 启用 TUN，首次开启可能需要系统授权。
 
-Windows 安装完成页默认将 `cor` 添加到 PATH。macOS 将应用拖入「应用程序」并打开一次后，会静默为当前用户接入 PATH。两者都可在新终端中运行 `cor`。
-
-让 AI Agent 协助操作时，可让它先运行 `cor agent guide` 阅读随程序提供的指南。
+自 `0.7.3-dev.3.memory` 起，交互终端中直接运行 `cor` 也能打开终端界面。让 AI Agent 协助时，可让它先运行 `cor agent guide` 阅读内置指南。该版本的 Windows 安装器默认将 `cor` 加入 PATH。macOS 将应用拖入「应用程序」并打开一次后，会静默为当前用户配置 PATH。之后打开新终端即可运行 `cor`。
 
 ## 内存占用
 

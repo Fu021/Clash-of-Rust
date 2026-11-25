@@ -59,6 +59,6 @@
 
 **防回归**
 
-- 常驻 CI、Publish Release、Memory Benchmark；已授权的独立兼容验证和 COSMIC 手动诊断继续保留，职责与触发条件见[工作流索引](../workflows.md)。不因单轮调查另加未授权临时工作流。
+- 常驻 CI、Publish Release、Memory Benchmark 及已授权兼容入口的职责与触发条件见[工作流索引](../workflows.md)。COSMIC 桌面专项通过 [Pop!_OS 24.04 完整验收](../workflows/linux-expansion.md#完整验收与诊断)复查。单轮调查复用现有入口。
 - 手动 workflow 输入必须有校验和明确错误信息。
 - 缓存恢复不能让整个平台矩阵无限等待；必须有超时、部分失败和正常下载回退。

@@ -25,9 +25,9 @@ python3 -B website/export_preview.py
 
 每次公开正式版后执行独立 [loop-website](../docs/loop-website.md)，对照实际发行和权威文档循环修正内容、三类操作入口、双语及手机布局。客户端发布前准备对应说明，公开后再核对实际日期和附件；不重复客户端构建或发布验收。网站内容、版本记录和下载入口仅提供正式版，预发布不单独更新网站。
 
-正式版更新 `src/content/releases.json`。`series` 指定当前主次版本系列（如 `0.7`），`releases` 提供该系列正式版的版本、公开发布日期、双语标题、亮点与必要限制，`history` 保留更早正式版的版本、日期、双语 `summary` 和 GitHub 入口；摘要依据原始 Release，未记录的变更明确说明，不猜测补齐。进入新系列时将旧系列移入历史，不能丢失旧正式版。`downloads.stable` 提供正式版标签、发布时间和九种安装包的真实字节数；`checked` 为核对日期。与实际 Release 和 `docs/releases/` 核对，不把构建日期当发布日期，不将预发布或未发布源码能力写成正式版功能。
+正式版更新 `src/content/releases.json`。`series` 指定当前主次版本系列（如 `0.7`），`releases` 提供该系列正式版的版本、公开发布日期、双语标题、亮点与必要限制，`history` 保留更早正式版的版本、日期、双语 `summary` 和 GitHub 入口；摘要依据原始 Release，未记录的变更明确说明，不猜测补齐。进入新系列时将旧系列移入历史，不能丢失旧正式版。`downloads.stable` 提供正式版标签、发布时间、九种标准安装包及本版已有 RPM 的真实字节数。`checked` 为核对日期。与实际 Release 和 `docs/releases/` 核对，并以该正式版的安装器和命令行为校对 PATH 与 TUI 启动步骤。
 
-首页显示最近两个正式版的简短亮点，完整记录在 `releases.html`。版本记录与离线下载快照共用此文件；下载页只通过 GitHub `/releases/latest` 查询最新正式版，拒绝草稿、预发布标记及非正式版标签。九种安装包和各自 SHA256 文件全部有效后才替换快照；正常加载不显示查询状态，断网或数据不完整时沿用正式版快照，仅提示使用已保存列表并提供最新正式版入口。旧 `#preview` 链接也只显示正式版。禁止在 JS 或页面中另外维护一份版本快照。
+首页显示最近两个正式版的简短亮点，完整记录在 `releases.html`。版本记录与离线下载快照共用发布数据文件。下载页通过 GitHub `/releases/latest` 查询正式版，要求九种标准安装包及各自 SHA256 均有效。可选 RPM 仅在包和摘要都存在时展示，其他附件可从 GitHub Releases 查看。正常加载时隐藏查询状态，断网或标准附件不完整时沿用正式版快照，并提供正式版入口。旧 `#preview` 链接也显示正式版。版本快照统一保存在 `src/content/releases.json`。
 
 发布门槛见[发布工作流](../docs/workflows/release.md#publish-release)。执行 `python3 -B website/test_build.py`、`node --check website/src/site.js` 和 `node --check website/src/theme.js`，检查双语版本页与历史摘要、正式版下载、九种包与 SHA256、离线状态和站内导航。静态测试在临时目录构建和导出，不覆盖已有 `dist/` 或 `preview.html`；手动构建仍使用开头的命令。
 

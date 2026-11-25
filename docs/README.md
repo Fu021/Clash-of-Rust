@@ -57,7 +57,7 @@ iOS 当前只有宿主占位与界面原型；预览不代表已有可安装、�
 
 ## 发布历史、复盘与第三方来源
 
-- [`releases/`](releases/)仅保留当前正式版、最近公开预发布、当前开发版本及[文案模板](releases/TEMPLATE.md)；旧版文案查 Git 历史或 GitHub Releases。已发布正式版入口见[项目首页](../README.md)，开发分支说明不等于已发布版本。
+- [`releases/`](releases/)保存正式版、预发布版与历史版本的文案，也提供[发布模板](releases/TEMPLATE.md)。实际发布状态和附件以 GitHub Releases 为准，正式版下载见[项目首页](../README.md#安装与使用)。
 - 排查已知失败模式从[复盘索引](agent-failures/README.md)进入；[最近复盘](agent-failures/reviews.md)记录证据和验证范围，较早记录在[历史复盘](agent-failures/reviews-archive.md)。
 - 软件、字体及数据的许可见[第三方声明](../resources/THIRD-PARTY-NOTICES.txt)；[字体来源](../resources/fonts/SOURCE.md)、[国家和地区数据](../resources/countries/SOURCE.md)、[IP 检测来源](../resources/ip-check/SOURCE.md)分别保留来源与修改说明。
 - 界面依赖的局部兼容修复见 [Android 后端补丁](../vendor/slint-android-activity/PATCHES.md)和 [winit X11 同步补丁](../vendor/winit/PATCHES.md)；Slint 版本、字体和 edition 约束见[界面开发说明](../crates/client-ui/README.md)。

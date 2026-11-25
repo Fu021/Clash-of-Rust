@@ -19,13 +19,13 @@ Ubuntu 20.04 的 GitHub 托管镜像已于 2025 年 4 月 15 日退役。显式�
 
 在 Actions 手动运行 `Ubuntu Compatibility`，选择目标提交所在分支，填写同提交成功 CI 的 `run_id`。每个版本和架构使用独立 job，最多并行四项，复用该次 CI 的 DEB 和测试程序。
 
-`scripts/compatibility.py` 核对源 CI 的仓库、提交、成功终态以及 `package-linux-x64/arm64`、`linux-tun-test-x64/arm64`、`dependency-snapshot` 的唯一性、有效期和输入身份。各执行路径均复核 DEB、测试程序及包收据摘要，核对实际发行版版本与架构，实际安装候选包并执行基础系统代理/TUN、DNS 和关闭恢复。扩展 GUI、多用户及更新专项按常规 CI 策略验证。
+`scripts/compatibility.py` 核对源 CI 的仓库、提交、成功终态以及 `package-linux-x64/arm64`、`linux-tun-test-x64/arm64`、`dependency-snapshot` 的唯一性、有效期和输入身份。常驻矩阵复核 DEB、测试程序及包收据摘要，核对实际发行版版本与架构，安装候选包并验证系统代理、TUN、DNS 和关闭恢复。窗口和多用户回归按 [CI 覆盖策略](ci.md#测试覆盖)选测。
 
-Ubuntu [20.04 ARM64](https://github.com/Fu021/Clash-of-Rust/actions/runs/45366946510/job/138351129788) 和 [22.04 ARM64](https://github.com/Fu021/Clash-of-Rust/actions/runs/45373616570/job/138404196661) 已通过首轮全量验收，包括 GUI/TUI/CLI、两次真实 GDM 登录、包升级卸载和公开版本更新。
+需要验证 x64 的公开跨版本更新时，另填 `update_from_ci` 和 `update_release`。四个 LTS 都执行终端更新，24.04 x64 托管 runner 另验图形授权与更新。20.04 x64 在 Canonical 云镜像来宾中执行；22.04、24.04、26.04 x64 使用相应托管 runner。ARM64 在此模式下仍只执行基础容器验收。参数与回执见 [Linux 跨版本更新](linux-expansion.md#linux-跨版本更新)。
 
-GitHub 的 ARM64 作业仅验证基础安装及流量，即使指定跨版本更新参数也不启动虚拟机或执行更新专项。已有完整桌面验收是独立的历史证据。
+历史全量验收覆盖 Ubuntu [20.04 ARM64](https://github.com/Fu021/Clash-of-Rust/actions/runs/45366946510/job/138351129788) 和 [22.04 ARM64](https://github.com/Fu021/Clash-of-Rust/actions/runs/45373616570/job/138404196661)，包括 GUI/TUI/CLI、两次真实 GDM 登录、包升级卸载和公开版本更新。
 
-托管 runner 创建临时 GUI 账户时跳过登录历史初始化，单次最多等待 90 秒。创建超时后按用户名、目录和 UID 清理可能已创建的账户，再尝试，最多三次。Ubuntu 20.04 和 22.04 的图形更新夹具使用旧版 polkit 的 `.pkla`，仍执行真实密码认证和安装失败恢复。
+托管 runner 创建临时 GUI 账户时跳过登录历史初始化，单次最多等待 90 秒。创建超时后按用户名、目录和 UID 清理可能已创建的账户，最多尝试三次。Ubuntu 20.04 和 22.04 的旧式 polkit 夹具见[图形更新兼容说明](linux-expansion.md#linux-跨版本更新)。
 
 旧版预发布确认框的单行 OCR 未识别到完整标签时，在同一启用按钮的范围内复核灰度文字。倒计时按钮不具备夹具设置的启用强调色。
 

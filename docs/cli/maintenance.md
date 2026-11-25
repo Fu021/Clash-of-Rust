@@ -72,17 +72,17 @@ Geo 更新后后台因备份缺失无法启动时，启动恢复仅保留通过�
 
 CLI 后台使用 Linux systemd user unit、macOS LaunchAgent、Windows 当前用户登录任务（无窗口入口启动 `cor`，系统受限时沿用原有注册表回退）。`service install` 配置下次登录启动，当前会话用 `cor start`；`service remove` 只取消自启，停止当前后台用 `cor stop`。不是 Linux 系统级 root 服务，也不自动启用 linger。配置时记录可执行文件和数据目录，移动程序后应重新安装服务。建议桌面自启与 CLI 自启选择一种。卸载或更换安装目录前，对自定义 `--data-dir` 先执行 `cor stop` 和 `cor service remove --yes`；Windows 安装包也会清理默认目录的后台与当前安装的 CLI 自启项。
 
-完整安装更新需要正式安装目录：Linux DEB、Windows 安装程序或 macOS `.app`。便携目录可下载后手动安装。更新前退出其他长时间运行的 CLI 查询进程，避免 Windows 可执行文件被占用。Windows/macOS 的系统授权仍可能需要图形会话；无人值守环境可使用 `update download`。
+`cor update install` 支持 Windows 安装程序、macOS `.app`、Linux DEB 和官方 Arch x86_64 发布包。便携目录可下载后手动安装。更新前退出其他长时间运行的 CLI 查询进程，避免 Windows 可执行文件被占用。Windows/macOS 的系统授权可能需要图形会话；无人值守环境可使用 `update download`。
 
-RPM 和 Arch 原生安装的 `cor update check` 会报告发现的版本及其包管理器。JSON 的 `package_manager` 给出更新方式，`package` 为 `null`。更新系统包使用对应的[包管理器](../workflows/versions.md#版本与更新通道)。
+Fedora 和 openSUSE 的 RPM，以及使用旧 `pacman` 标记的 Arch 安装，仍交由对应的[包管理器](../workflows/versions.md#版本与更新通道)更新。此时 `cor update check` 的 JSON 用 `package_manager` 指出更新方式，`package` 为 `null`。
 
 新版 Windows 客户端更新支持交接闸门的安装包时，等待 UAC 不占用后台状态锁；授权后还会核对任务与窗口身份，再提交停机。旧安装包仍采用兼容交接，不能保证授权等待期间的状态查询立即返回，范围见[Windows 更新交接](../agent-failures/downloads.md)。
 
 ### Linux 纯命令行安装
 
-没有桌面窗口时，`cor update install` 在当前终端通过 `sudo` 授权，不依赖桌面 polkit 授权代理。停后台之前会核对当前账户安装这份 DEB 的命令权限。授权失败、取消或安装交接已过期时保留原后台；只有授权通过且后台、设置与数据目录仍匹配本次请求，才停止后台并安装。root 直接安装；普通账户缺少 sudo 或对应权限时，用原账户执行 `cor update download --output cor-update.deb`，下载后交管理员安装。
+没有桌面窗口时，`cor update install` 在当前终端通过 `sudo` 授权。DEB 由 `dpkg` 安装，官方 Arch 包由 `pacman -U` 安装。完成授权并复核后台、设置和数据目录仍匹配本次请求后，才停止后台并安装。授权失败、取消或安装交接已过期时保留原后台。root 直接安装。普通账户缺少权限时，用原账户通过 `cor update download --output FILE` 下载，再交管理员安装。将 `FILE` 换为带 `.deb` 或 `.pkg.tar.zst` 后缀的目标文件名。
 
-终端会等待 DEB 安装结束并报告实际结果，包管理器错误的有界尾部也写入安装记录，供诊断导出。安装成功后默认以原账户、原数据目录和资源路径启动后台与内核，不再要求手动 `cor start`；已保存的代理方式保持不变，TUN 仍需正常授权。`cor update install --no-start` 保留原内核开关状态，原来运行的仍恢复、原来关闭的保持关闭。安装失败只恢复更新前状态，不因默认自动启动而开启原来关闭的内核。只有确认内核及后台状态后才报告完成；安装成功但启动失败时分别说明这两个结果，不把已安装误报成未安装。
+终端会等待包管理器完成并报告实际结果，包管理器错误的有界尾部也写入安装记录，供诊断导出。安装成功后默认以原账户、原数据目录和资源路径启动后台与内核。已保存的代理方式保持不变，TUN 仍需正常授权。`cor update install --no-start` 保留原内核开关状态，原来运行的仍恢复、原来关闭的保持关闭。安装失败只恢复更新前状态。若已安装但启动失败，分别报告安装和启动结果。
 
 需要启动内核且存在完全匹配的 systemd 用户服务时，更新后通过该服务启动。已启用、程序与数据目录完全匹配的同名服务，也可重新接管此前手动启动的后台；不会仅凭服务名启动其他配置或其他账户。恢复前后核对 unit 内容、启用状态、覆盖配置和后台 PID；服务被修改、禁用或移除时明确报错，不重建服务、不重复启动后台。重新安装后 TUN 授权仍在原终端完成。若按 `--no-start` 或安装失败恢复原来的关闭状态，只恢复不启动内核的后台，不通过默认启动内核的服务恢复。旧安装交接记录没有自动启动字段时保持原语义。
 
