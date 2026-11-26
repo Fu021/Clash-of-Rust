@@ -485,8 +485,19 @@ async function checkBenchmarkDetails(origin) {
 
 async function checkThemes(origin) {
   for (const fixture of [
-    { timezone: "Asia/Shanghai", before: "2026-11-16T18:59:49+08:00", pause: "2026-11-16T18:59:50+08:00", initial: "light", after: "dark" },
-    { timezone: "America/Los_Angeles", before: "2026-11-16T06:59:49-08:00", pause: "2026-11-16T06:59:50-08:00", initial: "dark", after: "light" },
+    {
+      timezone: "Asia/Shanghai", before: "2026-11-16T17:59:49+08:00", pause: "2026-11-16T17:59:50+08:00",
+      initial: "light", after: "dark", extraBoundaries: [
+        ["2026-11-16T06:59:50+08:00", "light"],
+        ["2026-03-16T06:59:50+08:00", "light"],
+        ["2026-03-16T17:59:50+08:00", "dark"],
+        ["2026-06-16T19:59:50+08:00", "dark"],
+      ],
+    },
+    {
+      timezone: "America/Los_Angeles", before: "2026-12-16T07:29:49-08:00", pause: "2026-12-16T07:29:50-08:00",
+      initial: "dark", after: "light", extraBoundaries: [["2026-12-16T17:29:50-08:00", "dark"]],
+    },
   ]) {
     const context = await browser.newContext({
       viewport: { width: 360, height: 640 }, timezoneId: fixture.timezone, colorScheme: "dark",
@@ -530,6 +541,22 @@ async function checkThemes(origin) {
         dispatchEvent(new StorageEvent("storage", { key: "cor-site-theme", newValue: null }));
       });
       assert.equal(await mode(), "auto", "Cleared preference did not restore automatic mode");
+      for (const [before, after] of fixture.extraBoundaries) {
+        await page.clock.setSystemTime(new Date(before));
+        await page.evaluate(() => dispatchEvent(new Event("focus")));
+        assert.equal(await theme(), after === "light" ? "dark" : "light", `Before ${before}`);
+        await page.clock.fastForward(10000);
+        assert.equal(await theme(), after, `After ${before}`);
+      }
+      if (fixture.timezone === "Asia/Shanghai") {
+        await page.clock.setSystemTime(new Date("2026-05-31T23:59:50+08:00"));
+        await page.evaluate(() => dispatchEvent(new Event("focus")));
+        await page.clock.runFor(10000);
+        await page.clock.fastForward("05:59:50");
+        assert.equal(await theme(), "dark", "Before the first summer morning boundary");
+        await page.clock.runFor(10000);
+        assert.equal(await theme(), "light", "Crossing into June must use the summer schedule");
+      }
     } finally {
       await context.close();
     }
