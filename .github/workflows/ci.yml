@@ -624,7 +624,7 @@ jobs:
         id: rust_github
         with:
           prefix-key: ${{ steps.rust_identity.outputs.prefix }}
-          key: ${{ matrix.os == 'windows-11-arm' && format('vendor-{0}-local-deps-v1', hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/**', '.github/build-versions.json', 'vendor/**')) || format('workspace-{0}-local-deps-v1', hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/**', '.github/build-versions.json', 'apps/**', 'crates/**', 'vendor/**', 'resources/**')) }}
+          key: ${{ matrix.os == 'windows-11-arm' && format('vendor-{0}-local-deps-v1', hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/**', '.github/build-versions.json', 'vendor/**')) || format('workspace-{0}-local-deps-v{1}', hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/**', '.github/build-versions.json', 'apps/**', 'crates/**', 'vendor/**', 'resources/**'), matrix.system == 'macos' && matrix.arch == 'x64' && 2 || 1) }}
           cache-on-failure: false
           cache-bin: false
           # Source hashes are checked before restoring workspace mtimes; changed
@@ -650,7 +650,7 @@ jobs:
         timeout-minutes: 25
         with:
           path: ${{ steps.rust_identity.outputs.paths }}
-          key: ${{ steps.rust_identity.outputs.prefix }}-${{ matrix.os == 'windows-11-arm' && format('vendor-{0}-local-deps-v1', hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/**', '.github/build-versions.json', 'vendor/**')) || format('workspace-{0}-local-deps-v1', hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/**', '.github/build-versions.json', 'apps/**', 'crates/**', 'vendor/**', 'resources/**')) }}
+          key: ${{ steps.rust_identity.outputs.prefix }}-${{ matrix.os == 'windows-11-arm' && format('vendor-{0}-local-deps-v1', hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/**', '.github/build-versions.json', 'vendor/**')) || format('workspace-{0}-local-deps-v{1}', hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/**', '.github/build-versions.json', 'apps/**', 'crates/**', 'vendor/**', 'resources/**'), matrix.system == 'macos' && matrix.arch == 'x64' && 2 || 1) }}
           restore-keys: |
             ${{ steps.rust_identity.outputs.prefix }}-
             ${{ steps.rust_identity.outputs.legacy_prefix }}-

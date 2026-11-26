@@ -5288,6 +5288,7 @@ Private_Clean: 2 kB
         self.assertEqual(storage.lineage(legacy), storage.lineage(current))
         newer = current.replace('d'*64, 'f'*64).replace('a'*64, '0'*64)
         self.assertEqual(storage.lineage(current), storage.lineage(newer))
+        self.assertEqual(storage.lineage(current), storage.lineage(current.replace('local-deps-v1', 'local-deps-v2')))
         self.assertNotEqual(storage.lineage(current), storage.lineage(current.replace('macos-x64', 'macos-arm64')))
 
     def test_changed_vendor_source_invalidates_restored_fingerprints_before_cargo_runs(self):

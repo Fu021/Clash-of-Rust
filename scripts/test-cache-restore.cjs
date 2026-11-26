@@ -32,6 +32,16 @@ test("compiler caches are queried before the one retryable restore", () => {
   }
 });
 
+test("native cache save and retry restore use the same key", () => {
+  const workflow = fs.readFileSync(path.join(__dirname, "../.github/workflows/ci.yml"), "utf8");
+  const check = workflow.split(/^  (?=[a-z_]+:\s*$)/m).find((part) => part.startsWith("check:\n"));
+  const save = check.split("uses: Swatinem/rust-cache@")[1].split("\n      - ")[0];
+  const restore = check.split("name: Restore compatible native workspace with retries")[1].split("\n      - ")[0];
+  const cacheKey = save.match(/^\s+key: (.+)$/m)[1];
+  const restoreKey = restore.match(/^\s+key: (.+)$/m)[1];
+  assert.equal(restoreKey, `\${{ steps.rust_identity.outputs.prefix }}-${cacheKey}`);
+});
+
 test("cache outputs and missed, failed, or completed restores remain distinct", () => {
   assert.deepEqual(outputs("cache-primary-key<<eof\nprimary\neof\ncache-matched-key=found\n"), {
     "cache-primary-key": "primary",
