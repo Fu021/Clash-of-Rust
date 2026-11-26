@@ -588,6 +588,12 @@ main { animation: page-enter .24s ease-out both; }
 @media(max-width:640px) { .memory-stats { grid-template-columns:1fr; gap:1.5rem; } .memory-stats strong { font-size:3.5rem; } .demo-view { padding:.7rem; } .demo-controls .switch { max-width:100%; } }
 .product-shot { margin-top:1.5rem; }
 .capture-open { display: block; cursor: zoom-in; }
+.capture-script, .capture-fallback-dark { display: none; }
+.js .capture-script { display: block; }
+@media (prefers-color-scheme: dark) {
+  .capture-fallback-light { display: none; }
+  .capture-fallback-dark { display: block; }
+}
 .image-view { width: min(1500px, 96vw); max-height: 94dvh; padding: .8rem; background: var(--paper); color: var(--ink); border: 1px solid var(--line); border-radius: var(--radius); }
 .image-view::backdrop { background: #0b1518c9; }
 .image-tools { display: flex; justify-content: flex-end; margin-bottom: .8rem; }

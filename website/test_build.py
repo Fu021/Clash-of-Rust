@@ -309,6 +309,15 @@ class SiteTests(unittest.TestCase):
                     self.assertRegex(source, r'terminal-rule">[ ─]+</span>')
                 self.assertNotIn('app-home-light.webp', source)
                 self.assertNotIn('app-network.webp', source)
+        english_home = '\n'.join(line['text'] for line in terminal['en']['home']['lines'])
+        english_manual = (build.DIST/'en/tui.html').read_text()
+        english_start = (build.DIST/'en/start.html').read_text()
+        for index, label in ((3, 'Subscriptions'), (6, 'Network'), (8, 'Commands')):
+            self.assertIn(f'{index} {label}', english_home)
+            self.assertIn(f'{index} · {label}', english_manual)
+        self.assertIn('for Subscriptions', english_start)
+        self.assertIn('Start backend and core', english_start)
+        self.assertIn('Start backend and core', english_manual)
     def test_preview_embeds_assets(self):
         import export_preview
         with mock.patch.multiple(export_preview, ROOT=build.ROOT, DIST=build.DIST):

@@ -72,12 +72,18 @@ def render_capture(name, lang, root, captures):
     note = "演示数据" if lang == "zh" else "Demo data"
     expand = "放大：" if lang == "zh" else "Enlarge: "
     light, dark = (f'{root}assets/{escape(capture["files"][theme])}' for theme in ("light", "dark"))
+    image = (f'width="{capture["width"]}" height="{capture["height"]}" '
+             f'alt="{escape(label)}" loading="lazy"')
+    fallback = "".join(
+        f'<a class="frame capture-open capture-fallback-{theme}" href="{source}" '
+        f'aria-label="{expand}{escape(label)}"><img src="{source}" {image}></a>'
+        for theme, source in (("light", light), ("dark", dark))
+    )
     return (f'<figure class="product-shot{" phone" if phone else ""}" data-capture-name="{name}" data-capture-language="{lang}" '
             f'data-capture-version="{escape(capture["version"])}">'
-            f'<a class="frame capture-open" href="{light}" data-enlarge aria-label="{expand}{escape(label)}">'
+            f'<a class="frame capture-open capture-script" href="{light}" data-enlarge aria-label="{expand}{escape(label)}">'
             f'<picture><source data-night media="(prefers-color-scheme: dark)" srcset="{dark}">'
-            f'<img src="{light}" width="{capture["width"]}" height="{capture["height"]}" '
-            f'alt="{escape(label)}" loading="lazy"></picture></a>'
+            f'<img src="{light}" {image}></picture></a><noscript>{fallback}</noscript>'
             f'<figcaption>{escape(label)} · {platform} · {escape(capture["version"])} · {note}</figcaption></figure>')
 
 

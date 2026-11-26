@@ -685,6 +685,12 @@ async function run() {
     assert.equal(await page.locator("body").evaluate(body => getComputedStyle(body).backgroundColor), "rgb(16, 29, 35)");
     assert.ok((await page.locator(".scene img").evaluate(image => image.currentSrc)).includes("-night"));
     for (const language of ["", "/en"]) {
+      await page.goto(origin + language + "/guide", { waitUntil: "load", timeout: 20000 });
+      const fallback = page.locator(".capture-fallback-dark").first();
+      assert.equal(await fallback.isVisible(), true);
+      assert.equal(await page.locator(".capture-fallback-light").first().isVisible(), false);
+      assert.equal(await page.locator(".capture-script").first().isVisible(), false);
+      assert.ok((await fallback.getAttribute("href")).endsWith(language ? "app-home-en-dark.png" : "app-home-dark.png"));
       await page.goto(origin + language + "/", { waitUntil: "load", timeout: 20000 });
       const summary = page.locator(".benchmark-details summary");
       await summary.click();
