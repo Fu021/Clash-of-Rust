@@ -896,6 +896,33 @@ def hosted_test(package_run_id, target, fixture=None):
         write_json(REPORT/'linux-runner.json', result)
 
 
+def import_container_archive(record, directory, image, architecture):
+    archive = download(record, directory/'container.oci.tar.xz')
+    rootfs = directory/'container-rootfs.tar'
+    with tarfile.open(archive) as layout:
+        def blob(descriptor):
+            digest = descriptor['digest']
+            if not re.fullmatch(r'sha256:[a-f0-9]{64}', digest):
+                raise ValueError('Unexpected OCI blob identity')
+            member = layout.getmember('blobs/sha256/' + digest.removeprefix('sha256:'))
+            if not member.isfile():
+                raise ValueError('OCI blob must be a regular file')
+            return layout.extractfile(member)
+
+        with layout.extractfile('index.json') as stream:
+            descriptor, = json.load(stream)['manifests']
+        with blob(descriptor) as stream:
+            manifest = json.load(stream)
+        with blob(manifest['config']) as stream:
+            config = json.load(stream)
+        if (config['os'], config['architecture']) != ('linux', architecture):
+            raise ValueError('OCI archive does not match the compatibility platform')
+        layer, = manifest['layers']
+        with blob(layer) as stream, rootfs.open('wb') as output:
+            shutil.copyfileobj(stream, output)
+    run(['docker', 'image', 'import', '--platform', f'linux/{architecture}', rootfs, image], timeout=120)
+
+
 def container_test(package_run_id, target, image):
     from workflow_artifacts import commit
 
@@ -904,7 +931,11 @@ def container_test(package_run_id, target, image):
     result = {'distribution': target.os_release_id, 'version_id': target.release, 'arch': target.arch,
               'image': image, 'execution': 'container', 'kernel': os.uname().release,
               'runner': target.matrix_entry()['os'], 'success': False}
-    print(f'{target.distribution} {target.release} userspace on runner kernel {result["kernel"]}: {image}',
+    image_archive = target.container_image_archive()
+    if image_archive:
+        result['image_archive'] = image_archive
+    print(f'{target.distribution} {target.release} userspace on runner kernel {result["kernel"]}: '
+          + (image_archive['url'] if image_archive else image),
           flush=True)
     try:
         fetch_compatibility_package(package_run_id, target.arch, rpm=target.package_format == 'rpm')
@@ -931,8 +962,11 @@ def container_test(package_run_id, target, image):
                 run(['sudo', 'modprobe', 'tun'], timeout=30)
             name = 'cor-linux-compat-' + uuid.uuid4().hex
             architecture = {'x64': 'amd64', 'arm64': 'arm64'}[target.arch]
+            if image_archive:
+                import_container_archive(image_archive, directory, image, architecture)
             command = [
                 'docker', 'run', '--rm', '--name', name, '--init', '--privileged',
+                *(['--pull=never'] if image_archive else []),
                 '--platform', f'linux/{architecture}', '--network', 'bridge',
                 '--mount', f'type=bind,src={directory},dst=/work',
                 '--mount', f'type=bind,src={directory / "scripts"},dst=/work/scripts,readonly',

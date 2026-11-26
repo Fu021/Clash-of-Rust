@@ -16,8 +16,6 @@ BASIC_CONTAINER_IMAGES = {
     ('ubuntu', '20.04'): 'docker.io/library/ubuntu@sha256:8feb4d8ca5354def3d8fce243717141ce31e2c428701f6682bd2fafe15388214',
     ('debian', '12'): 'docker.io/library/debian@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc',
     ('debian', '13'): 'docker.io/library/debian@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2',
-    ('fedora', '44'): 'quay.io/fedora/fedora@sha256:c2311603edaa76512f78e9edbb2b5b3903b3ad5bbc43a94ecb2e6c5c501d5f0c',
-    ('fedora', '45'): 'quay.io/fedora/fedora@sha256:92837d4834c1cff45cc2d534b655489b8e536271de1897932117e396cc9980c5',
     ('linuxmint', '21.3'): JAMMY_CONTAINER,
     ('linuxmint', '22.3'): NOBLE_CONTAINER,
     ('pop', '22.04'): JAMMY_CONTAINER,
@@ -27,6 +25,16 @@ BASIC_CONTAINER_IMAGES = {
     ('opensuse', '16.0'): 'registry.opensuse.org/opensuse/leap@sha256:9c88da273b41600dfd12790849dfb198ddefed3a109eaf42ada944afb4282a9d',
     ('opensuse', '16.1'): 'registry.opensuse.org/opensuse/leap@sha256:755746c7eec92fbdd3c4b02be194bfded4a8d4fde0abedf1835f945d403f43c8',
     ('opensuse', '20261123'): 'registry.opensuse.org/opensuse/tumbleweed@sha256:e81375320e178f55d205d5d1abdec3ebf42ad43e680f757e2d45ba536617f468',
+}
+FEDORA_CONTAINER_ARCHIVES = {
+    '44': ('1.7', {
+        'x64': '75200f5752a74a21a616ca9a75e25beb594e2e117a0195c54f87c0b3e3974d1b',
+        'arm64': 'eca19542a48a8e39b84e869713a1fa2408cbcc578de26c25ae72e3334ef968c1',
+    }),
+    '45': ('1.4', {
+        'x64': 'cfd51bdc8a26bc6f23c6993145e19e9a2be4c7af2aefa1f309c5e05e5beac197',
+        'arm64': 'bc6c3b3e132e3ed5eff398112d16fcdca13dc8abd63550f8aad40e882b9617b6',
+    }),
 }
 MINT_CONTAINER_KEYRING = {
     'url': 'https://fastly.linuxmint.io/pool/main/l/linuxmint-keyring/linuxmint-keyring_2022.06.21_all.deb',
@@ -133,7 +141,18 @@ class Target:
             return ''
         if self.hosted:
             return UBUNTU_ARM_RUNNER_CONTAINERS[self.release] if self.arch == 'arm64' else ''
+        if self.family == 'fedora':
+            return f'cor-fedora-compatibility:{self.release}-{self.arch}'
         return BASIC_CONTAINER_IMAGES.get((self.family, self.release), '')
+
+    def container_image_archive(self):
+        if self.family != 'fedora':
+            return None
+        build, checksums = FEDORA_CONTAINER_ARCHIVES[self.release]
+        architecture = {'x64': 'x86_64', 'arm64': 'aarch64'}[self.arch]
+        root = f'https://dl.fedoraproject.org/pub/fedora/linux/releases/{self.release}/Container/{architecture}/images'
+        filename = f'Fedora-Container-Base-Generic-{self.release}-{build}.{architecture}.oci.tar.xz'
+        return {'url': f'{root}/{filename}', 'sha256': checksums[self.arch]}
 
     def matrix_entry(self, published_update=False):
         runner_release = self.release if self.hosted else self.vm_runner_release

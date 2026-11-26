@@ -65,13 +65,18 @@ def desktop_targets(suite):
 
 
 def container_targets(suite, *, published_update=False):
-    targets = [{'release': target.release, 'arch': target.arch, 'image': image}
-               for target in TARGETS.get(suite, ())
-               if (image := target.basic_container_image(published_update))]
-    for target in targets:
-        if inputs := DEB_CONTAINER_INPUTS.get((suite, target['release'])):
-            target['distribution_inputs'] = inputs
-    return {'container_targets': targets} if targets else {}
+    evidence = []
+    for target in TARGETS.get(suite, ()):
+        image = target.basic_container_image(published_update)
+        if not image:
+            continue
+        entry = {'release': target.release, 'arch': target.arch, 'image': image}
+        if archive := target.container_image_archive():
+            entry['image_archive'] = archive
+        if inputs := DEB_CONTAINER_INPUTS.get((suite, target.release)):
+            entry['distribution_inputs'] = inputs
+        evidence.append(entry)
+    return {'container_targets': evidence} if evidence else {}
 
 
 def matrix_evidence(suite, *, published_update=False):

@@ -2,7 +2,7 @@
 
 每个发行版有独立 `workflow_dispatch` 入口，指定同提交成功的 `CI` 运行编号 `run_id`。CI 每个 Linux 架构只编译一次并生成 DEB，再从同架构 DEB 组装 Fedora 和 openSUSE 验收使用的 RPM。发布时按 [Linux 范围](release.md)要求相应回执。
 
-基础验收实际安装并启动同源候选包，验证系统代理、TUN 流量、DNS 和退出恢复。全部 ARM64 目标使用按摘要固定的同架构容器，x64 使用发行版容器或托管 runner。容器覆盖发行版用户态和包管理，TUN 使用 runner 内核。桌面及更新的完整结果保存在独立专项或历史报告。
+基础验收实际安装并启动同源候选包，验证系统代理、TUN 流量、DNS 和退出恢复。全部 ARM64 目标使用按摘要固定输入的同架构容器，x64 使用发行版容器或托管 runner。容器覆盖发行版用户态和包管理，TUN 使用 runner 内核。桌面及更新的完整结果保存在独立专项或历史报告。
 
 ## Linux 跨版本更新
 
@@ -32,7 +32,7 @@ GUI 夹具收到中断信号后完成清理并保留原始失败。测试账户�
 | openSUSE Compatibility | Leap 16.0、16.1、Tumbleweed 20261123（均有 x64、ARM64） | 基础验收使用官方容器，Zypper 安装同源 RPM |
 | Arch Linux Compatibility | 官方 `base-20261108.0.623074` 容器（x64），使用 2026-11-15 签名软件源 | `makepkg` 从同源 DEB 生成原生包，再由 `pacman` 安装 |
 
-[Fedora 官方容器](https://quay.io/repository/fedora/fedora)的固定摘要返回 `MANIFEST_UNKNOWN` 时，从同一 Fedora 版本的官方标签取得新索引，核对索引和两种架构的清单摘要，更新固定值后重新验收。
+Fedora 使用 [44-1.7](https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Container/) 和 [45-1.4](https://dl.fedoraproject.org/pub/fedora/linux/releases/45/Container/) 的官方 Base Generic OCI 发行归档。更新时先用 Fedora 发行公钥验证 `CHECKSUM` 签名，再更新四份归档的固定摘要。验收校验下载的 SHA256，导入对应架构的根文件系统，并从本地镜像运行。兼容回执绑定实际采用的归档地址和摘要。
 
 Pop!_OS 22.04 的 ARM64 介质为 [Raspberry Pi 4 板级镜像](https://iso.pop-os.org/22.04/arm64/raspi/4/pop-os_22.04_arm64_raspi_4.img.xz)，该版本仅在矩阵中覆盖 x64。Pop!_OS 24.04 ARM64 的历史本地完整验收使用 [官方通用镜像](https://system76.com/download-pop/)。
 

@@ -10127,6 +10127,25 @@ success="$1"
         client, source, receipt = self.client(suite, published_update=True)
         self.assertEqual(compatibility.verified_suite(client, source, suite), receipt)
 
+    def test_fedora_receipt_binds_each_architecture_to_its_official_archive(self):
+        suite = 'fedora'
+        entries = compatibility.container_targets(suite)['container_targets']
+        self.assertEqual({(entry['release'], entry['arch']) for entry in entries},
+                         {(release, arch) for release in ('44', '45') for arch in ('x64', 'arm64')})
+        for entry in entries:
+            archive = entry['image_archive']
+            architecture = {'x64': 'x86_64', 'arm64': 'aarch64'}[entry['arch']]
+            self.assertTrue(archive['url'].endswith(f'.{architecture}.oci.tar.xz'))
+            self.assertRegex(archive['sha256'], r'\A[a-f0-9]{64}\Z')
+        client, source, receipt = self.client(suite)
+        self.assertEqual(compatibility.verified_suite(client, source, suite), receipt)
+        changed = {**entries[0], 'image_archive': {**entries[0]['image_archive'], 'sha256': '0'*64}}
+        client, source, _ = self.client(suite, receipt_changes={'container_targets': [changed, *entries[1:]]})
+        with self.assertRaisesRegex(ValueError, 'differs from the selected CI artifacts or checks'):
+            compatibility.verified_suite(client, source, suite)
+        self.assertEqual(compatibility.container_targets(suite, published_update=True)['container_targets'],
+                         [entry for entry in entries if entry['arch'] == 'arm64'])
+
     def test_opensuse_basic_uses_containers_and_published_updates_keep_cloud_images(self):
         suite = 'opensuse'
         basic = compatibility.suite_matrix(suite)['include']
@@ -10393,7 +10412,10 @@ success="$1"
                     self.assertTrue(matrix['os'].endswith('-arm'))
                     self.assertEqual((matrix['qemu'], matrix['vm_cache_prefix']), ('', ''))
                     self.assertEqual(matrix, target.matrix_entry(published_update=True))
-                    self.assertRegex(target.basic_container_image(), r'@sha256:[a-f0-9]{64}\Z')
+                    if archive := target.container_image_archive():
+                        self.assertRegex(archive['sha256'], r'\A[a-f0-9]{64}\Z')
+                    else:
+                        self.assertRegex(target.basic_container_image(), r'@sha256:[a-f0-9]{64}\Z')
                     self.assertEqual(target.basic_container_image(), target.basic_container_image(True))
 
 
