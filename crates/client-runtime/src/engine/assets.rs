@@ -82,7 +82,7 @@ pub fn core_path(resources: &Path) -> Result<PathBuf> {
     Ok(path)
 }
 
-pub fn seed(resources: &Path, runtime: &Path) -> Result<GeoManifest> {
+pub fn seed(resources: &Path, runtime: &Path, allow_upgrade: bool) -> Result<GeoManifest> {
     core_path(resources)?;
-    clash_client_core::geodata::seed(resources, runtime)
+    clash_client_core::geodata::seed(resources, runtime, allow_upgrade)
 }

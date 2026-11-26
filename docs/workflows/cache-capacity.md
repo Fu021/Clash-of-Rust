@@ -34,6 +34,8 @@
 
 正式版来源 `24a1c967` 的 [CI 45783249363](https://github.com/Fu021/Clash-of-Rust/actions/runs/45783249363) 13 项通过。九份 Rust 缓存均报告 `Cache up-to-date.`，包含 macOS Intel 和 ARM64。三个 Android Go 目标、共享 Maven 和两套 Linux 构建镜像均成功复用。[Memory Benchmark 45788967631](https://github.com/Fu021/Clash-of-Rust/actions/runs/45788967631) 的 Rust 缓存同样报告 `Cache up-to-date.`。两轮预算作业均无需移除条目，基准结束后共 19 条、19.19 GiB，均属 `main`，其中一条用于内存基准。
 
+`70bd5c55` 的 [CI 45843335474](https://github.com/Fu021/Clash-of-Rust/actions/runs/45843335474) 13 项通过。macOS Intel 将 Rust 缓存保存时限增至 12 分钟，并用新键避开无法预留的旧键。该目标上传完整的 2.30 GiB，新键已在缓存清单中；其余八个 Rust 目标报告 `Cache up-to-date.`。Android 三个 Go 目标、Maven 和 Linux 双架构构建缓存均命中。预算作业移除旧 Intel 键，保留 19 条、19.26 GiB，均属 `main`。
+
 ## main 基线与分支只读
 
 2026-11-11 的 CI `42978665228` 和 Memory `42978712845` 均通过。保留策略按用途合并新旧键名，每个目标仅保存 main 最新代。开发分支直接恢复可用基线，省掉差异归档的全目录扫描、构建后比较与叠加成本。

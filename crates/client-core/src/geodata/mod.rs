@@ -137,7 +137,32 @@ pub fn atomic_copy(source: &Path, destination: &Path) -> Result<()> {
     persist_file(file, destination)
 }
 
-pub fn seed(resources: &Path, runtime: &Path) -> Result<GeoManifest> {
+fn newer_bundle(bundle: &GeoManifest, current: &GeoManifest) -> bool {
+    let published = |manifest: &GeoManifest| {
+        manifest
+            .version
+            .split_whitespace()
+            .last()
+            .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+    };
+    matches!((published(bundle), published(current)), (Some(bundle), Some(current)) if bundle > current)
+}
+
+fn should_upgrade(resources: &Path, current: &GeoManifest, allow_upgrade: bool) -> bool {
+    allow_upgrade && read_manifest(resources).is_ok_and(|bundle| newer_bundle(&bundle, current))
+}
+
+pub fn needs_seed(resources: &Path, runtime: &Path, allow_upgrade: bool) -> Result<bool> {
+    if runtime.join(JOURNAL).try_exists()? {
+        return Ok(true);
+    }
+    let Ok(current) = verify_geo(runtime) else {
+        return Ok(true);
+    };
+    Ok(should_upgrade(resources, &current, allow_upgrade))
+}
+
+pub fn seed(resources: &Path, runtime: &Path, allow_upgrade: bool) -> Result<GeoManifest> {
     if let Err(error) = recover(runtime) {
         if error.is::<MissingBackup>() {
             return retain_verified_runtime(runtime).with_context(|| {
@@ -149,16 +174,46 @@ pub fn seed(resources: &Path, runtime: &Path) -> Result<GeoManifest> {
         }
         return Err(error);
     }
-    // Preserve all four user-updated files as a set; only seed missing/invalid sets.
-    if let Ok(manifest) = verify_geo(runtime) {
-        return Ok(manifest);
+    let previous = verify_geo(runtime).ok();
+    if let Some(current) = &previous
+        && !should_upgrade(resources, current, allow_upgrade)
+    {
+        return Ok(current.clone());
     }
-    verify_geo(resources).context("安装包离线 Geo 数据不完整，请重新安装")?;
-    for name in GEO_FILES {
-        atomic_copy(&resources.join(name), &runtime.join(name))?;
+    let bundle = match verify_geo(resources) {
+        Ok(bundle) => bundle,
+        Err(error) => {
+            return previous
+                .ok_or(error)
+                .context("安装包离线 Geo 数据不完整，请重新安装");
+        }
+    };
+    if let Some(current) = &previous
+        && !newer_bundle(&bundle, current)
+    {
+        return Ok(current.clone());
     }
-    atomic_copy(&resources.join(MANIFEST), &runtime.join(MANIFEST))?;
-    verify_geo(runtime)
+    std::fs::create_dir_all(runtime)?;
+    let result = (|| {
+        begin_install(resources, runtime)?;
+        let installed = verify_geo(runtime)?;
+        commit(runtime)?;
+        Ok::<_, anyhow::Error>(installed)
+    })();
+    match result {
+        Ok(installed) => Ok(installed),
+        Err(error) => {
+            recover(runtime).context("安装包 Geo 数据切换失败，恢复旧文件也失败")?;
+            if previous.is_some() {
+                let restored =
+                    verify_geo(runtime).context("安装包 Geo 数据切换后旧数据校验失败")?;
+                eprintln!("安装包 Geo 数据切换失败，已保留本机数据：{error:#}");
+                Ok(restored)
+            } else {
+                Err(error.context("安装包 Geo 数据初始化失败"))
+            }
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -1002,6 +1057,153 @@ mod tests {
         )
         .unwrap();
     }
+
+    fn fixture_version(path: &Path, version: &str) {
+        let mut manifest = read_manifest(path).unwrap();
+        manifest.version = version.into();
+        atomic_write(
+            &path.join(MANIFEST),
+            &serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn startup_selects_only_a_verified_newer_bundle() {
+        let cases = [
+            (
+                "latest | 2026-11-26T04:16:13Z",
+                "latest · 2026-11-25T04:16:13Z",
+                true,
+            ),
+            (
+                "latest | 2026-11-25T04:16:13Z",
+                "latest · 2026-11-26T04:16:13Z",
+                false,
+            ),
+            (
+                "latest | 2026-11-26T12:16:13+08:00",
+                "latest · 2026-11-26T04:16:13Z",
+                false,
+            ),
+            ("latest | invalid", "latest · 2026-11-25T04:16:13Z", false),
+            ("latest | 2026-11-26T04:16:13Z", "latest · invalid", false),
+            ("latest", "latest", false),
+        ];
+        for (bundle_version, current_version, select_bundle) in cases {
+            let tmp = tempfile::tempdir().unwrap();
+            let runtime = tmp.path().join("runtime");
+            let resources = tmp.path().join("resources");
+            fixture(&runtime, b"current-data");
+            fixture(&resources, b"bundled-data");
+            fixture_version(&runtime, current_version);
+            fixture_version(&resources, bundle_version);
+            let original_manifest = std::fs::read(runtime.join(MANIFEST)).unwrap();
+
+            assert_eq!(
+                needs_seed(&resources, &runtime, true).unwrap(),
+                select_bundle
+            );
+            let selected = seed(&resources, &runtime, true).unwrap();
+            assert_eq!(
+                selected.version,
+                if select_bundle {
+                    bundle_version
+                } else {
+                    current_version
+                }
+            );
+            for name in GEO_FILES {
+                assert_eq!(
+                    std::fs::read(runtime.join(name)).unwrap(),
+                    if select_bundle {
+                        b"bundled-data"
+                    } else {
+                        b"current-data"
+                    }
+                );
+            }
+            if !select_bundle {
+                assert_eq!(
+                    std::fs::read(runtime.join(MANIFEST)).unwrap(),
+                    original_manifest
+                );
+            }
+            assert!(!runtime.join(JOURNAL).exists());
+        }
+    }
+
+    #[test]
+    fn startup_preserves_valid_runtime_if_upgrade_is_locked_or_bundle_is_invalid() {
+        let tmp = tempfile::tempdir().unwrap();
+        let runtime = tmp.path().join("runtime");
+        let resources = tmp.path().join("resources");
+        fixture(&runtime, b"current-data");
+        fixture(&resources, b"bundled-data");
+        fixture_version(&runtime, "latest · 2026-11-25T04:16:13Z");
+        fixture_version(&resources, "latest | 2026-11-26T04:16:13Z");
+        let original_manifest = std::fs::read(runtime.join(MANIFEST)).unwrap();
+
+        assert!(!needs_seed(&resources, &runtime, false).unwrap());
+        seed(&resources, &runtime, false).unwrap();
+        assert_eq!(
+            std::fs::read(runtime.join(MANIFEST)).unwrap(),
+            original_manifest
+        );
+
+        std::fs::write(resources.join("GeoIP.dat"), b"corrupt").unwrap();
+        assert!(needs_seed(&resources, &runtime, true).unwrap());
+        seed(&resources, &runtime, true).unwrap();
+        assert_eq!(
+            std::fs::read(runtime.join(MANIFEST)).unwrap(),
+            original_manifest
+        );
+        for name in GEO_FILES {
+            assert_eq!(std::fs::read(runtime.join(name)).unwrap(), b"current-data");
+        }
+    }
+
+    #[test]
+    fn startup_recovers_interrupted_bundle_install_and_retries_as_a_set() {
+        let tmp = tempfile::tempdir().unwrap();
+        let runtime = tmp.path().join("runtime");
+        let resources = tmp.path().join("resources");
+        fixture(&runtime, b"current-data");
+        fixture(&resources, b"bundled-data");
+        fixture_version(&runtime, "latest · 2026-11-25T04:16:13Z");
+        fixture_version(&resources, "latest | 2026-11-26T04:16:13Z");
+        begin_install(&resources, &runtime).unwrap();
+        std::fs::write(runtime.join("GeoSite.dat"), b"interrupted").unwrap();
+
+        assert!(needs_seed(&resources, &runtime, true).unwrap());
+        seed(&resources, &runtime, true).unwrap();
+        assert!(!runtime.join(JOURNAL).exists());
+        for name in GEO_FILES {
+            assert_eq!(std::fs::read(runtime.join(name)).unwrap(), b"bundled-data");
+        }
+        assert!(verify_geo(&runtime).is_ok());
+    }
+
+    #[test]
+    fn startup_repairs_an_invalid_or_absent_runtime_from_a_valid_bundle() {
+        for damaged in [false, true] {
+            let tmp = tempfile::tempdir().unwrap();
+            let runtime = tmp.path().join("runtime");
+            let resources = tmp.path().join("resources");
+            fixture(&resources, b"bundled-data");
+            if damaged {
+                fixture(&runtime, b"current-data");
+                std::fs::write(runtime.join("ASN.mmdb"), b"corrupt").unwrap();
+            }
+            assert!(needs_seed(&resources, &runtime, false).unwrap());
+            seed(&resources, &runtime, false).unwrap();
+            for name in GEO_FILES {
+                assert_eq!(std::fs::read(runtime.join(name)).unwrap(), b"bundled-data");
+            }
+            assert!(verify_geo(&runtime).is_ok());
+        }
+    }
+
     #[test]
     fn interrupted_update_restores_whole_set() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1215,7 +1417,7 @@ mod tests {
 
             assert!(recover(&runtime).unwrap_err().is::<MissingBackup>());
             assert!(runtime.join(JOURNAL).exists());
-            let kept = seed(&tmp.path().join("absent-resources"), &runtime).unwrap();
+            let kept = seed(&tmp.path().join("absent-resources"), &runtime, true).unwrap();
             assert!(kept.installed_at.is_none());
             for name in GEO_FILES {
                 assert_eq!(std::fs::read(runtime.join(name)).unwrap(), b"new-data");
@@ -1270,7 +1472,7 @@ mod tests {
         }
         std::fs::remove_dir_all(backup).unwrap();
 
-        let kept = seed(&staged, &runtime).unwrap();
+        let kept = seed(&staged, &runtime, true).unwrap();
         assert_eq!(kept.installed_at, Some(123));
         assert_eq!(
             std::fs::read(runtime.join("GeoIP.dat")).unwrap(),
@@ -1294,7 +1496,7 @@ mod tests {
         let journal = std::fs::read(runtime.join(JOURNAL)).unwrap();
         let manifest = std::fs::read(runtime.join(MANIFEST)).unwrap();
 
-        let error = seed(&resources, &runtime).unwrap_err();
+        let error = seed(&resources, &runtime, true).unwrap_err();
         assert!(format!("{error:#}").contains("当前整组 Geo 数据未通过校验"));
         assert_eq!(std::fs::read(runtime.join(JOURNAL)).unwrap(), journal);
         assert_eq!(std::fs::read(runtime.join(MANIFEST)).unwrap(), manifest);
@@ -1334,7 +1536,7 @@ mod tests {
                 std::fs::write(backup.join("ASN.mmdb"), b"corrupt").unwrap();
             }
             let journal = std::fs::read(runtime.join(JOURNAL)).unwrap();
-            assert!(seed(&staged, &runtime).is_err());
+            assert!(seed(&staged, &runtime, true).is_err());
             assert_eq!(std::fs::read(runtime.join(JOURNAL)).unwrap(), journal);
             assert_eq!(
                 std::fs::read(runtime.join("GeoIP.dat")).unwrap(),

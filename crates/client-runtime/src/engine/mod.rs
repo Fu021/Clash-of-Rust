@@ -256,9 +256,12 @@ impl Engine {
             }
         };
         crate::profile_transaction::recover(&store.root)?;
-        let geo_manifest = assets::seed(&resources, &store.runtime())?;
-        let logs = Arc::new(Mutex::new(VecDeque::new()));
         let settings = store.load_settings();
+        let allow_geo_upgrade = settings
+            .as_ref()
+            .is_ok_and(|settings| settings.claude_protection.is_none());
+        let geo_manifest = assets::seed(&resources, &store.runtime(), allow_geo_upgrade)?;
+        let logs = Arc::new(Mutex::new(VecDeque::new()));
         #[cfg(target_os = "macos")]
         let keep_proxy = settings.as_ref().is_ok_and(|settings| {
             settings.proxy_mode == ProxyMode::System
@@ -2718,11 +2721,8 @@ fn validation_error_detail(error: &str) -> &str {
 mod startup_tests {
     use super::*;
 
-    #[test]
-    fn missing_empty_or_invalid_profile_index_preserves_the_active_subscription() {
-        let directory = tempfile::tempdir().unwrap();
-        let resources = directory.path().join("resources");
-        std::fs::create_dir(&resources).unwrap();
+    fn startup_resources(resources: &std::path::Path, version: &str, data: &[u8]) {
+        std::fs::create_dir_all(resources).unwrap();
         std::fs::write(resources.join("mihomo"), b"fixture").unwrap();
         std::fs::write(
             resources.join("default.yaml"),
@@ -2733,7 +2733,7 @@ mod startup_tests {
             .iter()
             .map(|name| {
                 let path = resources.join(name);
-                std::fs::write(&path, b"fixture").unwrap();
+                std::fs::write(&path, data).unwrap();
                 let (sha256, size) = assets::hash_file(&path).unwrap();
                 assets::GeoFile {
                     name: (*name).into(),
@@ -2744,7 +2744,7 @@ mod startup_tests {
             })
             .collect();
         let manifest = assets::GeoManifest {
-            version: "fixture".into(),
+            version: version.into(),
             updated: 0,
             installed_at: None,
             files,
@@ -2754,6 +2754,57 @@ mod startup_tests {
             serde_json::to_vec(&manifest).unwrap(),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn cold_backend_after_an_app_upgrade_uses_the_newer_geo_bundle() {
+        use clash_client_core::protection::{Previous, Protection};
+
+        let directory = tempfile::tempdir().unwrap();
+        let resources = directory.path().join("resources");
+        let store = Store::at(directory.path().join("data")).unwrap();
+        let old = "latest | 2026-11-25T00:00:00Z";
+        let new = "latest | 2026-11-26T00:00:00Z";
+        startup_resources(&resources, old, b"old data");
+        let engine = Engine::with_resources(store.clone(), resources.clone()).unwrap();
+        assert_eq!(engine.geo_manifest.version, old);
+        let mut settings = engine.settings.clone();
+        drop(engine);
+
+        startup_resources(&resources, new, b"new data");
+        settings.claude_protection = Some(Arc::new(Protection::new(
+            settings.active_profile.clone().unwrap(),
+            "fixture".into(),
+            Previous {
+                mode: "rule".into(),
+                proxy_mode: ProxyMode::Off,
+                selectors: Default::default(),
+            },
+        )));
+        store.save_settings(&settings).unwrap();
+        let engine = Engine::with_resources(store.clone(), resources.clone()).unwrap();
+        assert_eq!(engine.geo_manifest.version, old);
+        assert_eq!(assets::verify_geo(&store.runtime()).unwrap().version, old);
+        drop(engine);
+
+        settings.claude_protection = None;
+        store.save_settings(&settings).unwrap();
+        let engine = Engine::with_resources(store.clone(), resources.clone()).unwrap();
+        assert_eq!(engine.geo_manifest.version, new);
+        assert_eq!(assets::verify_geo(&store.runtime()).unwrap().version, new);
+        drop(engine);
+
+        startup_resources(&resources, old, b"old data");
+        let engine = Engine::with_resources(store.clone(), resources).unwrap();
+        assert_eq!(engine.geo_manifest.version, new);
+        assert_eq!(assets::verify_geo(&store.runtime()).unwrap().version, new);
+    }
+
+    #[test]
+    fn missing_empty_or_invalid_profile_index_preserves_the_active_subscription() {
+        let directory = tempfile::tempdir().unwrap();
+        let resources = directory.path().join("resources");
+        startup_resources(&resources, "fixture", b"fixture");
         let store = Store::at(directory.path().join("data")).unwrap();
         let mut engine = Engine::with_resources(store.clone(), resources.clone()).unwrap();
         let id = uuid::Uuid::new_v4().to_string();

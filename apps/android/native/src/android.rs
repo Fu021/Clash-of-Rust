@@ -175,6 +175,34 @@ pub extern "system" fn Java_org_clashofrust_android_AppLanguage_nativeResolve(
 }
 
 #[unsafe(no_mangle)]
+pub extern "system" fn Java_org_clashofrust_android_CoreBridge_nativePrepareGeo(
+    mut unowned_env: EnvUnowned<'_>,
+    _: JClass<'_>,
+    resources: JString<'_>,
+    runtime: JString<'_>,
+    allow_upgrade: jni::sys::jboolean,
+    apply: jni::sys::jboolean,
+) -> jni::sys::jstring {
+    unowned_env
+        .with_env(|env| {
+            let resources = resources.try_to_string(env)?;
+            let runtime = runtime.try_to_string(env)?;
+            let resources = std::path::Path::new(&resources);
+            let runtime = std::path::Path::new(&runtime);
+            let result = if apply != 0 {
+                core::geodata::seed(resources, runtime, allow_upgrade != 0)
+                    .map(|_| json!({"needed":false}))
+            } else {
+                core::geodata::needs_seed(resources, runtime, allow_upgrade != 0)
+                    .map(|needed| json!({"needed":needed}))
+            };
+            let response = result.unwrap_or_else(|error| json!({"error":format!("{error:#}")}));
+            env.new_string(response.to_string()).map(JString::into_raw)
+        })
+        .resolve::<jni::errors::LogErrorAndDefault>()
+}
+
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_org_clashofrust_android_CoreBridge_nativeColdRuntime(
     mut unowned_env: EnvUnowned<'_>,
     _: JClass<'_>,

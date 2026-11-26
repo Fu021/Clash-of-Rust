@@ -4,7 +4,6 @@ import android.content.Context;
 import java.io.*;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
-import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.charset.StandardCharsets;
 import org.json.JSONObject;
@@ -12,32 +11,73 @@ import org.clashofrust.nativecore.mobile.Mobile;
 
 /** Process-scoped core. Activity recreation must not restart the VPN or core. */
 public final class CoreBridge {
+    static { System.loadLibrary("clash_mobile"); }
     private static boolean started;
     private static String lastConfig = "";
     private static boolean ipv6Enabled = true;
     private static long generation;
     private CoreBridge() {}
     private static native String nativeColdRuntime(String root, boolean applicationRulesSupported);
+    private static native String nativePrepareGeo(String resources, String runtime, boolean allowUpgrade, boolean apply);
+
+    private static JSONObject prepareGeo(File resources, File runtime, boolean allowUpgrade, boolean apply) throws Exception {
+        JSONObject response = new JSONObject(nativePrepareGeo(resources.getAbsolutePath(), runtime.getAbsolutePath(), allowUpgrade, apply));
+        if (response.has("error")) throw new IOException(response.getString("error"));
+        return response;
+    }
+
+    private static void copyGeoAsset(Context context, File directory, String name) throws IOException {
+        try (InputStream in = context.getAssets().open(name);
+             FileOutputStream out = new FileOutputStream(new File(directory, name))) {
+            byte[] buffer = new byte[8192];
+            int count;
+            while ((count = in.read(buffer)) != -1) out.write(buffer, 0, count);
+            out.getFD().sync();
+        }
+    }
+
+    private static void seedGeo(Context context, File home) throws Exception {
+        boolean allowUpgrade = !TunnelService.recoveryRequired(context);
+        if (allowUpgrade) {
+            try {
+                File settings = new File(context.getFilesDir(), "client/settings.json");
+                allowUpgrade = Files.notExists(settings.toPath(), LinkOption.NOFOLLOW_LINKS)
+                    || !protectedMode(context);
+            } catch (Exception error) {
+                allowUpgrade = false;
+            }
+        }
+        String[] databases = {"GeoIP.dat", "GeoSite.dat", "Country.mmdb", "ASN.mmdb"};
+        File staging = new File(context.getCacheDir(), "geo-bundle");
+        try {
+            try {
+                Files.createDirectories(staging.toPath());
+                copyGeoAsset(context, staging, "geodata.json");
+                if (!prepareGeo(staging, home, allowUpgrade, false).getBoolean("needed")) return;
+                for (String name : databases) copyGeoAsset(context, staging, name);
+            } catch (IOException error) {
+                try {
+                    prepareGeo(home, home, false, true);
+                } catch (Exception recoveryError) {
+                    error.addSuppressed(recoveryError);
+                    throw error;
+                }
+                android.util.Log.w("ClashOfRust", "Kept local Geo data after APK staging failed", error);
+                return;
+            }
+            prepareGeo(staging, home, allowUpgrade, true);
+        } finally {
+            for (String name : databases) new File(staging, name).delete();
+            new File(staging, "geodata.json").delete();
+            staging.delete();
+        }
+    }
 
     public static synchronized String start(Context context, String raw, boolean ipv6) throws Exception {
         ApplicationOwners.install(context);
         File home = new File(context.getFilesDir(), "client/runtime");
         if (!home.isDirectory() && !home.mkdirs()) throw new IOException(AppLanguage.current(context).getString(R.string.core_directory_failed));
-        // Seed only absent files; keep complete user updates across app upgrades.
-        for (String name : new String[]{"GeoIP.dat", "GeoSite.dat", "Country.mmdb", "ASN.mmdb", "geodata.json"}) {
-            File target = new File(home, name);
-            if (!target.isFile()) {
-                File partial = new File(home, name + ".partial");
-                try (InputStream in = context.getAssets().open(name);
-                     FileOutputStream out = new FileOutputStream(partial)) {
-                    byte[] buffer = new byte[8192];
-                    int count;
-                    while ((count = in.read(buffer)) != -1) out.write(buffer, 0, count);
-                    out.getFD().sync();
-                }
-                Files.move(partial.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING);
-            }
-        }
+        if (!started) seedGeo(context, home);
         if (started) Mobile.reload(raw); else { Mobile.start(home.toString(), raw); started = true; }
         generation++;
         lastConfig = raw;

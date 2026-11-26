@@ -71,6 +71,31 @@ public class ProxyTunTest {
             proxies.getJSONObject("proxies").has("CI-TUN-origin"));
     }
 
+    private static byte[] installOlderGeoFixture(Context context) throws Exception {
+        File runtime = new File(context.getFilesDir(), "client/runtime");
+        Files.createDirectories(runtime.toPath());
+        String bundled;
+        try (java.util.Scanner reader = new java.util.Scanner(
+                context.getAssets().open("geodata.json"), "UTF-8").useDelimiter("\\A")) {
+            bundled = reader.next();
+        }
+        JSONObject manifest = new JSONObject(bundled)
+            .put("version", "latest · 2000-01-01T00:00:00Z")
+            .put("installed_at", 100);
+        byte[] old = "old".getBytes(StandardCharsets.UTF_8);
+        JSONArray files = manifest.getJSONArray("files");
+        assertEquals(4, files.length());
+        for (int index = 0; index < files.length(); index++) {
+            JSONObject file = files.getJSONObject(index);
+            Files.write(new File(runtime, file.getString("name")).toPath(), old);
+            file.put("size", old.length)
+                .put("sha256", "cba06b5736faf67e54b07b561eae94395e774c517a7d910a54369e1263ccfbd4");
+        }
+        Files.write(new File(runtime, "geodata.json").toPath(),
+            manifest.toString().getBytes(StandardCharsets.UTF_8));
+        return bundled.getBytes(StandardCharsets.UTF_8);
+    }
+
     @Test public void notificationShowsModeAndNodeWithOptionalSpeeds() throws Exception {
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
         Context chinese = AppLanguage.localized(context, "zh-CN");
@@ -3613,9 +3638,14 @@ public class ProxyTunTest {
         notificationShowsModeAndNodeWithOptionalSpeeds();
         heldResponseClassifiesTruncationAsTransportFailure();
         persistNetworkProfile(context);
+        byte[] bundledGeo = installOlderGeoFixture(context);
         assertTrue(context.getSharedPreferences("page-views", Context.MODE_PRIVATE).edit().clear().commit());
         startAfterInvalidSettings(context);
         await("Native UI did not start its core", CoreBridge::ready);
+        File runtime = new File(context.getFilesDir(), "client/runtime");
+        assertArrayEquals("Core startup did not select the newer APK Geo data",
+            bundledGeo, Files.readAllBytes(new File(runtime, "geodata.json").toPath()));
+        assertFalse("Cold start left a Geo transaction open", new File(runtime, "geo-transaction.json").exists());
         await("Activity did not receive focus", () -> inStage(androidx.test.runner.lifecycle.Stage.RESUMED, true));
         waitForAppWindow();
         verifyConnectionsTouch();
