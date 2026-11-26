@@ -1,24 +1,58 @@
 {
-  "checked": "2026-11-17",
+  "checked": "2026-11-26",
   "series": "0.7",
   "downloads": {
     "stable": {
-      "tag": "v0.7.2",
-      "published": "2026-11-17T15:03:58Z",
+      "tag": "v0.7.3",
+      "published": "2026-11-26T09:03:12Z",
       "sizes": {
-        "windows-x64-setup.exe": 51372214,
-        "windows-arm64-setup.exe": 47740092,
-        "linux-amd64.deb": 53001616,
-        "linux-arm64.deb": 49183712,
-        "macos-arm64.dmg": 56782571,
-        "macos-x64.dmg": 61670771,
-        "android-arm64.apk": 68299417,
-        "android-armv7.apk": 66919069,
-        "android-x64.apk": 71084691
+        "windows-x64-setup.exe": 51680080,
+        "windows-arm64-setup.exe": 48019722,
+        "linux-amd64.deb": 53257968,
+        "linux-arm64.deb": 49403772,
+        "linux-x86_64.rpm": 79335576,
+        "linux-aarch64.rpm": 74854332,
+        "linux-x86_64.pkg.tar.zst": 77391509,
+        "macos-arm64.dmg": 57194263,
+        "macos-x64.dmg": 62259470,
+        "android-arm64.apk": 68803283,
+        "android-armv7.apk": 67369687,
+        "android-x64.apk": 71588557
       }
     }
   },
   "releases": [
+    {
+      "version": "0.7.3", "channel": "stable", "date": "2026-11-26",
+      "en": {
+        "title": "Two languages, easier editing and more Linux packages",
+        "highlights": [
+          "Desktop, Android, TUI and CLI follow the system language by default and support switching between English and Simplified Chinese.",
+          "Open the TUI by running cor in an interactive terminal. Windows and macOS can configure PATH automatically, and cor agent guide provides built-in troubleshooting help.",
+          "Long links, import forms and search fields scroll with the cursor on desktop and Android. Lists remember their selected view.",
+          "Claude protection and IP reports show the routes used by each service. On macOS, startup waits briefly for the network helper during DNS recovery and offers a retry on failure.",
+          "Profiles, Geo data and app updates recover more reliably from stalled downloads. Desktop and Android ship Mihomo 1.19.34.",
+          "Large node and shortcut-rule lists use less TUI memory. Linux also reclaims idle backend memory after the window closes.",
+          "Linux packages include DEB and RPM for x64 and ARM64 and a native Arch x86_64 package with in-app updates."
+        ],
+        "known": "Fedora and openSUSE updates use the system package manager. Android input methods, external mice and first-time authorizations still need testing on a range of real devices.",
+        "summary": "English and Simplified Chinese, easier long-text editing, and native RPM and Arch packages."
+      },
+      "zh": {
+        "title": "双语界面、更顺手的编辑与更多 Linux 安装包",
+        "highlights": [
+          "桌面、Android、TUI 和 CLI 默认跟随系统语言，可在简体中文和英文之间切换。",
+          "在交互终端运行 cor 即可打开 TUI。Windows 和 macOS 支持自动配置 PATH，cor agent guide 提供内置排障指南。",
+          "桌面和 Android 的长链接、导入表单及搜索框随光标滚动，列表会记住查看方式。",
+          "Claude 保护和 IP 报告展示各服务的实际出口。macOS 启动时若正在恢复 DNS，会短暂等待网络助手，失败后可重试。",
+          "订阅、Geo 数据和应用更新下载停滞后更容易恢复，桌面与 Android 内置 Mihomo 1.19.34。",
+          "TUI 浏览大型节点和快捷规则列表时更省内存。Linux 改进了关闭窗口后回收后台空闲内存的方式。",
+          "Linux 提供 x64 和 ARM64 的 DEB、RPM，以及支持应用内更新的 Arch x86_64 原生包。"
+        ],
+        "known": "Fedora 和 openSUSE 仍通过系统包管理器更新。Android 输入法、外接鼠标和首次授权仍需不同厂商真机验证。",
+        "summary": "支持简体中文与英文，长文本更好编辑，新增 RPM 与 Arch 原生包下载。"
+      }
+    },
     {
       "version": "0.7.2", "channel": "stable", "date": "2026-11-17",
       "en": {

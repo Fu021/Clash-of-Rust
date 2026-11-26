@@ -20,7 +20,7 @@
     <h2>选工具，查目标，看结果。</h2>
     <p>在“网络诊断”选择工具，输入域名或网址后运行。参数和结果在同一张卡片里，离开页面即清除。</p>
     {{shot:network}}
-    <details class="benchmark-details"><summary>在终端界面中查看</summary><div class="benchmark-body">{{terminal:network}}<p>运行 <code>cor ui</code> 后按 <kbd>4</kbd>，用 <kbd>[</kbd> / <kbd>]</kbd> 选工具，<kbd>/</kbd> 输入目标，<kbd>Enter</kbd> 运行。</p></div></details>
+    <details class="benchmark-details"><summary>在终端界面中查看</summary><div class="benchmark-body">{{terminal:network}}<p>运行 <code>cor</code> 后按 <kbd>6</kbd>，用 <kbd>←</kbd> / <kbd>→</kbd> 选工具。按 <kbd>/</kbd> 输入目标，回车结束输入，再按回车运行。</p></div></details>
     <div class="interface-links"><a href="guide.html#checks">GUI 手册</a><a href="tui.html#network">TUI 手册</a><a href="cli.html#network">CLI 手册</a><a href="#check">逐项检查 ↓</a></div>
   </section>
   <section id="choose">
@@ -86,10 +86,10 @@
     <h2>在哪里找到它</h2>
     <table class="plain">
       <tbody>
-        <tr><th scope="row">窗口</th><td>侧栏“工具”下的“网络诊断”。输入、操作和结果在同一张卡片里。</td></tr>
+        <tr><th scope="row">桌面窗口</th><td>从侧栏直接打开“网络诊断”。输入、操作和结果在同一张卡片里。</td></tr>
         <tr><th scope="row">Android</th><td>同一套工具，从“工具”入口进入。路由追踪取决于系统里有没有 traceroute。</td></tr>
         <tr><th scope="row">命令行</th><td><code>cor network</code> 后面跟工具名和目标，Windows、Linux、macOS 通用。</td></tr>
-        <tr><th scope="row">终端界面</th><td>运行 <code>cor ui</code>，按 <kbd>4</kbd> 进入。<kbd>[</kbd> 和 <kbd>]</kbd> 切换工具，<kbd>/</kbd> 输入目标，<kbd>Enter</kbd> 运行，<kbd>Esc</kbd> 取消。</td></tr>
+        <tr><th scope="row">终端界面</th><td>运行 <code>cor</code>，按 <kbd>6</kbd> 进入工具页。用 <kbd>←</kbd> / <kbd>→</kbd> 切换工具。按 <kbd>/</kbd> 输入目标，回车结束输入，再按回车运行。按 <kbd>Esc</kbd> 取消。</td></tr>
       </tbody>
     </table>
     <p style="margin-top:1.4rem"><a class="more" href="download.html">下载正式版</a> · <a href="{{docs}}/network-tools.md" target="_blank" rel="noopener">详细技术说明</a></p>

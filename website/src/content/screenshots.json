@@ -4,8 +4,8 @@
     "width": 1200,
     "height": 800,
     "platform": "desktop",
-    "version": "0.7.2",
-    "commit": "141e1cbd670af2e31d95c2f8e43e39f4bb312eaa",
+    "version": "0.7.3",
+    "commit": "24a1c967eb26c3943641b5fad463a33cb159011c",
     "theme": "light",
     "source": "production-slint-preview"
   },
@@ -14,8 +14,8 @@
     "width": 1200,
     "height": 800,
     "platform": "desktop",
-    "version": "0.7.2",
-    "commit": "141e1cbd670af2e31d95c2f8e43e39f4bb312eaa",
+    "version": "0.7.3",
+    "commit": "24a1c967eb26c3943641b5fad463a33cb159011c",
     "theme": "light",
     "source": "production-slint-preview"
   },
@@ -24,8 +24,8 @@
     "width": 1200,
     "height": 800,
     "platform": "desktop",
-    "version": "0.7.2",
-    "commit": "141e1cbd670af2e31d95c2f8e43e39f4bb312eaa",
+    "version": "0.7.3",
+    "commit": "24a1c967eb26c3943641b5fad463a33cb159011c",
     "theme": "light",
     "source": "production-slint-preview"
   },
@@ -34,8 +34,8 @@
     "width": 1200,
     "height": 800,
     "platform": "desktop",
-    "version": "0.7.2",
-    "commit": "141e1cbd670af2e31d95c2f8e43e39f4bb312eaa",
+    "version": "0.7.3",
+    "commit": "24a1c967eb26c3943641b5fad463a33cb159011c",
     "theme": "light",
     "source": "production-slint-preview"
   },
@@ -44,8 +44,8 @@
     "width": 1200,
     "height": 800,
     "platform": "desktop",
-    "version": "0.7.2",
-    "commit": "141e1cbd670af2e31d95c2f8e43e39f4bb312eaa",
+    "version": "0.7.3",
+    "commit": "24a1c967eb26c3943641b5fad463a33cb159011c",
     "theme": "light",
     "source": "production-slint-preview"
   },
@@ -54,8 +54,8 @@
     "width": 1200,
     "height": 800,
     "platform": "desktop",
-    "version": "0.7.2",
-    "commit": "141e1cbd670af2e31d95c2f8e43e39f4bb312eaa",
+    "version": "0.7.3",
+    "commit": "24a1c967eb26c3943641b5fad463a33cb159011c",
     "theme": "light",
     "source": "production-slint-preview"
   },
@@ -64,8 +64,8 @@
     "width": 393,
     "height": 852,
     "platform": "android",
-    "version": "0.7.2",
-    "commit": "141e1cbd670af2e31d95c2f8e43e39f4bb312eaa",
+    "version": "0.7.3",
+    "commit": "24a1c967eb26c3943641b5fad463a33cb159011c",
     "theme": "light",
     "source": "production-slint-preview"
   }

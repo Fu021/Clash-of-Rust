@@ -1,5 +1,5 @@
 <!-- title: Download Clash of Rust -->
-<!-- description: Installers for Windows, Debian/Ubuntu, macOS and Android from GitHub Releases, with install steps and SHA256 verification. -->
+<!-- description: Installers for Windows, Linux, macOS and Android from GitHub Releases, with install steps and SHA256 verification. -->
 <section class="page-head">
   <div class="wrap">
     <h1>Download. Install. Connect.</h1>
@@ -26,16 +26,23 @@
         <div>
           <ul class="pkgs" data-pkgs></ul>
           <p class="how">Run the installer and follow the prompts. Upgrading over an older version keeps your subscriptions and settings.</p>
+          <p class="how">The installer adds <code>cor</code> to PATH by default. Reopen your terminal to run it.</p>
           <p class="how">For a Defender alert, <a href="#verify">check SHA256</a>, then follow the <a href="{{docs}}/workflows/release.md#windows-defender-告警" target="_blank" rel="noopener">alert notes</a>.</p>
         </div>
       </section>
 
       <section class="os" id="linux" data-os="linux">
-        <div><h2>Debian / Ubuntu</h2><p>Ubuntu 20.04 or later</p><span class="yours" data-yours></span></div>
+        <div><h2>Linux</h2><p>DEB, RPM and native Arch packages</p><span class="yours" data-yours></span></div>
         <div>
           <ul class="pkgs" data-pkgs></ul>
-          <p class="how">In the folder where you saved the file, run <code>sudo apt install ./the-file-name.deb</code>. The <code>cor</code> command is on your PATH afterwards.</p>
-          <p class="how">Not sure which architecture you have? <code>dpkg --print-architecture</code> prints it.</p>
+          <p class="how">Run the command for your distribution from your downloads folder. Replace the example filename with the file you downloaded.</p>
+          <ul>
+            <li>On Debian, Ubuntu 20.04 or later, and compatible distributions, run <code>sudo apt install ./package.deb</code></li>
+            <li>On Fedora, run <code>sudo dnf install ./package.rpm</code></li>
+            <li>On openSUSE, run <code>sudo zypper install ./package.rpm</code></li>
+            <li>On Arch Linux x86_64, run <code>sudo pacman -U ./package.pkg.tar.zst</code></li>
+          </ul>
+          <p class="how">Use <code>uname -m</code> to check your architecture. <code>x86_64</code> means x64 or amd64, and <code>aarch64</code> means ARM64. Run <code>cor</code> after installation.</p>
         </div>
       </section>
 
@@ -43,7 +50,7 @@
         <div><h2>macOS</h2><p>macOS 14 or later</p><span class="yours" data-yours></span></div>
         <div>
           <ul class="pkgs" data-pkgs></ul>
-          <p class="how">Open the DMG and drag Clash of Rust into Applications, then start it from there.</p>
+          <p class="how">Open the DMG, drag Clash of Rust into Applications and launch it once from there. It configures PATH for your account. Open a new login shell to run <code>cor</code>.</p>
           <p class="how">The app is not notarized by Apple, so macOS stops it the first time. Allow it under Privacy &amp; Security as <a href="https://support.apple.com/en-us/102445" target="_blank" rel="noopener">Apple describes</a>.</p>
         </div>
       </section>
@@ -66,11 +73,11 @@
 Get-FileHash .\the-file-name.exe -Algorithm SHA256
 
 <span class="c"># Linux</span>
-sha256sum the-file-name.deb
+sha256sum downloaded-package
 
 <span class="c"># macOS</span>
 shasum -a 256 the-file-name.dmg</pre>
-    <p>The app does the same check on its own before it installs an update.</p>
+    <p>The app verifies the checksum before installing an update. On Fedora and openSUSE, install the new RPM with your package manager.</p>
   </section>
 
   <section id="next">
@@ -82,8 +89,8 @@ shasum -a 256 the-file-name.dmg</pre>
     <h2>Questions people ask</h2>
     <div class="qa">
       <details><summary>Is there an iOS version?</summary><p>No. The repository has an interface prototype for iOS and nothing you can install.</p></details>
-      <details><summary>What about other Linux distributions?</summary><p>Only DEB packages are published, and they are validated on Debian and on Ubuntu 20.04 and later. On other distributions you would need to build from source; see the developer docs in the repository.</p></details>
-      <details><summary>Does the Linux package work without a desktop?</summary><p>Yes. The DEB includes <code>cor</code>, which needs no display. Run <code>cor start</code>, and use TUN on a server.</p></details>
+      <details><summary>Which Linux distributions are tested?</summary><p>Version 0.7.3 passed basic proxy and TUN checks on Ubuntu, Debian, Linux Mint, Pop!_OS, Zorin OS, Fedora, openSUSE and Arch Linux. Each version's release notes describe what was tested.</p></details>
+      <details><summary>Do the Linux packages work without a desktop?</summary><p>Yes. They include <code>cor</code>, which needs no display. Run <code>cor start</code> and use TUN on a server.</p></details>
       <details><summary>Will an update lose my settings?</summary><p>No. Upgrades keep subscriptions and personal settings. The Windows uninstaller can delete all data if you ask it to; that option is off by default.</p></details>
     </div>
   </section>

@@ -16,14 +16,14 @@
     </section>
     <section id="subscriptions">
       <h2>Subscriptions</h2>
-      <p>Add a remote URL or import local YAML, then choose Use to activate it. Remote profiles can update from their source. Local profiles can be edited, renamed or removed without deleting your original file.</p>
+      <p>In Subscriptions, choose Import and enter a name and subscription URL. For local YAML, use Local file on desktop or Choose local file in the Android import form. Save, then choose Use to activate the subscription. Remote profiles can update from their source. You can rename or remove local profiles while keeping the original file.</p>
       <p>Download or validation failures preserve the existing profile and running state. Removing the active profile returns to Default direct, which cannot be edited or removed.</p>
       {{shot:subscriptions}}
-      <p>Search, grid and list views are available. Phones keep some actions in details. See <a href="#settings">schedules</a> for automatic updates; Claude protection pauses subscription changes and updates.</p>
+      <p>Search by name or source, choose a grid or list, and switch between showing all profiles and pagination. On phones, editing, updating and removing profiles are in the details. See <a href="#settings">schedules</a> for automatic updates. Claude protection pauses subscription changes and updates.</p>
     </section>
     <section id="modes">
       <h2>Nodes and modes</h2>
-      <p>Search and test nodes in Proxies, using a grid or compact list. Select members of manual groups; automatic groups such as AUTO choose for themselves. Details show node information and available actions.</p>
+      <p>Search and test nodes in Proxies, using a grid or compact list. On desktop, show all proxy groups or page through them. You choose members of manual groups while the core handles automatic groups such as AUTO. Details show node information and available actions.</p>
       <div class="table-scroll"><table class="plain"><thead><tr><th>Mode</th><th>Exit selection</th></tr></thead><tbody><tr><th>Rule</th><td>Matches each connection against ordered rules; groups may lead to other groups.</td></tr><tr><th>Global</th><td>Uses the GLOBAL policy group.</td></tr><tr><th>Direct</th><td>Bypasses proxy nodes.</td></tr></tbody></table></div>
       {{shot:nodes}}
       <p>Latency tests measure reachability and response time, not bandwidth. A timeout does not mean a node was removed. If every node fails, the mode is preserved and recovery options appear; update downloads have a separate fallback.</p>
@@ -41,10 +41,10 @@
       <div class="table-scroll"><table class="plain"><thead><tr><th>Scope</th><th>Selected apps</th><th>Other apps</th></tr></thead><tbody><tr><th>All apps</th><td>Enter VPN</td><td>Enter VPN</td></tr><tr><th>Only selected</th><td>Enter VPN</td><td>Use the original network</td></tr><tr><th>Exclude selected</th><td>Use the original network</td><td>Enter VPN</td></tr></tbody></table></div>
       {{shot:applications}}
       <h3>Choose an app's exit</h3>
-      <p>On Android 10+, App rules supports named groups, app filtering and a node, policy group, DIRECT or REJECT exit. Rules belong to their profile; switching profiles does not attach an old exit to a new node. Android 8/9 supports VPN scope but not app-specific exits.</p>
+      <p>On Android 10 or later, choose Manage app rules to create named groups, filter apps and choose a node, policy group, DIRECT or REJECT. Rules belong to their profile and follow the selected profile. On Android 8 and 9, you can still set VPN scope.</p>
       <p>Block connections when the target is missing is enabled by default. A recoverable warning appears when a real connection is blocked by a missing or changed target; latency timeouts alone do not make it missing. Disable this option to fall back to the ordinary configuration. Apps outside VPN scope cannot use these exits.</p>
       <h3>Save and recover</h3>
-      <p>While connected, choose Save and reconnect. The old VPN is replaced only after the system accepts the new one; failure keeps the old connection. Normal mode respects your UDP switch. An exit without UDP support blocks that UDP traffic rather than changing routes.</p>
+      <p>While connected, choose Save and reconnect. The new VPN applies the change once connected. If reconnecting fails, the app reports the cause and restores the old connection. If disconnected, saved changes apply on the next connection. Normal mode respects the UDP switch. An exit without UDP support blocks that traffic.</p>
       <p>Claude protection covers all apps, suspends app exits and locks edits; disabling it restores your settings. Android's Block connections without VPN setting may block excluded apps too. <a href="{{docs}}/android-application-routing.md">Full routing boundaries ↗</a></p>
     </section>
     <section id="connections">
@@ -54,7 +54,7 @@
     </section>
     <section id="checks">
       <h2>Checks and tools</h2>
-      <p>IP check shows exits and service reachability. A÷ check gathers Claude region, DNS and configuration clues. Network diagnostics follows requests through website checks, DNS, TLS and actual exits.</p>
+      <p>IP check shows exit addresses, service reachability and confirmed per-service exits. A÷ check groups Claude region, DNS and configuration clues by topic. Network diagnostics checks websites, DNS, TLS and actual exits. On Android phones, these pages are usually under Tools.</p>
       {{shot:network}}
       <p>Tools run on demand and keep only the current result; leaving cancels and clears it. An HTTP response does not prove login works. Inputs, options, report states and protection limits are in the <a href="tools.html">network tools manual</a>.</p>
     </section>
@@ -67,13 +67,14 @@
     </section>
     <section id="settings">
       <h2>Settings and schedules</h2>
-      <p>General and Appearance offer window size, tray speed, theme, accent and font size. Network includes ports, IPv6, UDP, DNS and Fake-IP. Network changes may reload the core; check the result shown by the app.</p>
-      <p>Automatic subscription updates and software checks use minutes: default 360, 0 disables them, maximum 10080. Protection pauses the relevant tasks. Manual update checks ignore the automatic interval.</p>
+      <p>In Settings, choose System, Simplified Chinese or English. The interface switches as soon as you save. Appearance offers theme, accent and font size, with window and tray options on desktop. Network includes ports, IPv6, UDP, DNS and Fake-IP. Check the result shown by the app after making a change.</p>
+      <p>Subscription updates and software checks have separate schedules in minutes. Both default to 360, accept up to 10080 and use 0 to turn off automatic checks. A manual software check resets its timer. Protection pauses the relevant schedules.</p>
       <p>Fake-IP exclusions have a dedicated editor and do not require changing the original profile. Phones, tablets and desktops share fields where possible; compact screens move actions into details.</p>
     </section>
     <section id="updates">
       <h2>Updates and autostart</h2>
       <p>Settings → Update checks stable releases by default. Include prereleases adds newer previews. Installers are verified with SHA256. Android also requires system confirmation and cannot install a lower version as a normal update.</p>
+      <p>The official Arch package can download and install updates from the app. Fedora and openSUSE use their package managers for RPM updates.</p>
       <p>Geo updates replace data only after validating the full set; failure keeps the old data. Follow recoverable prompts for download, permission or installation errors, or <a href="download.html">download manually</a>. Keep your configuration.</p>
       <p>Desktop Background autostart logs in with the window closed. If the tray remains unavailable after waiting, a window opens to explain. CLI user services are an alternative; choose one autostart method. Android's foreground VPN service is separate from desktop login autostart.</p>
     </section>

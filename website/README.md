@@ -25,11 +25,11 @@ python3 -B website/export_preview.py
 
 每次公开正式版后执行独立 [loop-website](../docs/loop-website.md)，对照实际发行和权威文档循环修正内容、三类操作入口、双语及手机布局。客户端发布前准备对应说明，公开后再核对实际日期和附件；不重复客户端构建或发布验收。网站内容、版本记录和下载入口仅提供正式版，预发布不单独更新网站。
 
-正式版更新 `src/content/releases.json`。`series` 指定当前主次版本系列（如 `0.7`），`releases` 提供该系列正式版的版本、公开发布日期、双语标题、亮点与必要限制，`history` 保留更早正式版的版本、日期、双语 `summary` 和 GitHub 入口；摘要依据原始 Release，未记录的变更明确说明，不猜测补齐。进入新系列时将旧系列移入历史，不能丢失旧正式版。`downloads.stable` 提供正式版标签、发布时间、九种标准安装包及本版已有 RPM 的真实字节数。`checked` 为核对日期。与实际 Release 和 `docs/releases/` 核对，并以该正式版的安装器和命令行为校对 PATH 与 TUI 启动步骤。
+正式版更新 `src/content/releases.json`。`series` 指定当前主次版本系列（如 `0.7`），`releases` 提供该系列正式版的版本、公开发布日期、双语标题、亮点与必要限制，`history` 保留更早正式版的版本、日期、双语 `summary` 和 GitHub 入口；摘要依据原始 Release，未记录的变更明确说明，不猜测补齐。进入新系列时将旧系列移入历史，不能丢失旧正式版。`downloads.stable` 提供正式版标签、发布时间、九种标准安装包及本版已发布的 RPM 和 Arch 安装包的真实字节数。`checked` 为核对日期。与实际 Release 和 `docs/releases/` 核对，并以该正式版的安装器和命令行为校对 PATH 与 TUI 启动步骤。
 
-首页显示最近两个正式版的简短亮点，完整记录在 `releases.html`。版本记录与离线下载快照共用发布数据文件。下载页通过 GitHub `/releases/latest` 查询正式版，要求九种标准安装包及各自 SHA256 均有效。可选 RPM 仅在包和摘要都存在时展示，其他附件可从 GitHub Releases 查看。正常加载时隐藏查询状态，断网或标准附件不完整时沿用正式版快照，并提供正式版入口。旧 `#preview` 链接也显示正式版。版本快照统一保存在 `src/content/releases.json`。
+首页显示最近两个正式版的简短亮点，完整记录在 `releases.html`。版本记录与离线下载快照共用发布数据文件。下载页通过 GitHub `/releases/latest` 查询正式版，要求九种标准安装包及各自 SHA256 均有效。每个可选 RPM 或 Arch 安装包在包和摘要都存在时展示。正常加载时隐藏查询状态，断网或标准附件不完整时沿用正式版快照，并提供正式版入口。旧 `#preview` 链接也显示正式版。版本快照统一保存在 `src/content/releases.json`。
 
-发布门槛见[发布工作流](../docs/workflows/release.md#publish-release)。执行 `python3 -B website/test_build.py`、`node --check website/src/site.js` 和 `node --check website/src/theme.js`，检查双语版本页与历史摘要、正式版下载、九种包与 SHA256、离线状态和站内导航。静态测试在临时目录构建和导出，不覆盖已有 `dist/` 或 `preview.html`；手动构建仍使用开头的命令。
+发布门槛见[发布工作流](../docs/workflows/release.md#publish-release)。执行 `python3 -B website/test_build.py`、`node --check website/src/site.js` 和 `node --check website/src/theme.js`，检查双语版本页与历史摘要、正式版安装包与 SHA256、离线状态和站内导航。静态测试在临时目录构建和导出，不覆盖已有 `dist/` 或 `preview.html`；手动构建仍使用开头的命令。
 
 真实浏览器与多尺寸长图检查交给现有 CI 的 `Website validation`，仅在网站或 CI 工作流变化时安装锁定的 Playwright 并运行；不在资源受限主机运行。该任务独立于客户端编译，使用只读权限，浏览器缓存仅存本次 runner。检查脚本自行构建后，串行核对十六个页面的 360×640 手机、800×1280 平板与 1280×800 桌面布局、首页连续缩放和 80%～200% CSS 缩放，以及中文默认、语言切换、三类手册和旧深链、折叠菜单与目录、图片放大、轮播及暂停、减少动态效果与无 JavaScript 回退。手机启用移动设备与触摸仿真，用触摸操作菜单、目录、截图和轮播。下载测试模拟 GitHub 正常、离线、缺校验文件和非法链接，浏览器不访问外网。每页保留中英文桌面/手机长图，中文另存平板长图，报告为短期 `website-browser-report` 附件；总预算五分钟，失败不自动整轮重跑。设备仿真及 CSS 缩放回归不代替真机与系统缩放验收。`package.json` 和锁文件只服务于测试，构建与 Cloudflare 部署仍只需 Python 标准库。
 
@@ -37,7 +37,7 @@ python3 -B website/export_preview.py
 
 页脚访客数统计功能启用以来的独立浏览器。同一站点的页面、语言和标签页共用 IndexedDB 中的随机标识。Worker 只保存该标识的摘要，并用 SQLite 唯一约束去重。换浏览器、换设备或清除站点数据会重新计数。浏览器存储不可用时只查询总数，接口离线、静态预览或禁用 JavaScript 时隐藏计数。测试同一浏览器同时打开中英文页面、刷新和接口失败。需要连同计数接口预览时，先构建网站，再在仓库根目录运行 `npx wrangler dev`，使用本地的计数存储。
 
-首页内存区保留底部留白，使用与终端区相同的像素过渡连接下一节。“测试条件与来源”和手机菜单共用展开、收起动效，支持键盘、连续切换及动态启用减少动态效果；无脚本时保留原生折叠操作。浏览器回归另核对中英文电脑/手机的间距、展开/收起及无脚本回退，下载回退覆盖接口离线、缺少校验、非法链接、草稿及预发布响应；旧 `#preview` 不恢复通道切换。
+首页首屏和双语内存区共用 `src/content/memory.json` 中的正式版测量值和运行编号。按原始基准更新时，同步内存区的环境和测量边界。内存区保留底部留白，使用与终端区相同的像素过渡连接下一节。“测试条件与来源”和手机菜单共用展开、收起动效，支持键盘、连续切换及动态启用减少动态效果；无脚本时保留原生折叠操作。浏览器回归核对中英文电脑/手机的间距、展开/收起及无脚本回退。
 
 ## 内容与设计
 
@@ -48,7 +48,7 @@ python3 -B website/export_preview.py
 - 插画使用乡间铁路、道岔和蓝猫主题；原图在 `src/art/raw/`，网页图在 `src/assets/`，新增来源见[插画说明](src/art/README.md)。每个内容页均有插画，图片外框、按钮与卡片采用统一圆角。动效使用短时透明度、位移和颜色过渡，无常驻逐帧任务。
 - 首页导览可见时每 2.6 秒切换桌面软件画面，选择画面后暂停，也可手动暂停/继续；焦点位于导览内、图片放大、切到其他标签页、导览离屏或系统减少动态效果时停用计时，悬停不暂停。切换预留共同高度，首页不混入手机竖屏图；无脚本保留第一帧。CLI 与 TUI 展示紧接导览所在区块，后接功能列表；终端内容按宽度换行，不要求横向拖拉。
 - 字标在构建时直接复制 README 的 `resources/icons/wordmark-light.svg`；深色背景使用对应 `wordmark-dark.svg`，不以近似字体替换。首页桌面和手机使用同一张完整插画与比例，不另换手机裁图；代理、直连、拦截三种出口标签均保留，手机紧凑排列在画面上方，渐隐遮罩只作用于插画，不裁切标签。其余横幅使用同源缩略图。手机导航及章节目录可折叠，图片可放大，命令和表格在局部滚动。
-- `src/content/screenshots.json` 记录 GUI 截图的真实版本、来源提交、尺寸及平台；`terminal.json` 保留实际 PTY 帧。每类画面跨页复用，图注显示其真实版本，不随下载快照改标签。当前 GUI 和 TUI 画面以正式版 `0.7.2`、提交 `141e1cb` 为来源；GUI 使用正式 Slint 组件的演示数据，TUI 使用实际 `cor ui --demo` 捕获。两者只验证展示，不代替联网或设备验收；不手写屏幕内容冒充实测。
+- `src/content/screenshots.json` 记录 GUI 截图的真实版本、来源提交、尺寸及平台；`terminal.json` 保留实际 PTY 帧。每类画面跨页复用，图注显示其真实版本，不随下载快照改标签。当前画面来自正式版 `0.7.3`、提交 `24a1c967`。GUI 使用正式 Slint 组件和演示数据，TUI 来自[内存基准](https://github.com/Fu021/Clash-of-Rust/actions/runs/45788967631)中使用虚构订阅的隔离 PTY。两者的展示验证范围不含联网或设备验收。
 - 字体使用 National Park、Departure Mono 和 Noto Sans SC，许可证随 `src/assets/fonts/` 保留。来源分别为 https://github.com/benhoepner/National-Park 、https://departuremono.com/ 、https://github.com/notofonts/noto-cjk 。中文正文使用系统字体，标题使用真实 Medium 子集，避免伪加粗。
 - 修改中文标题、按钮或版本内容后检查展示字体的字形覆盖；有新增字形时执行 `python3 website/prepare_assets.py fonts` 更新子集。源字体放 `.cache/fonts/`，路径见脚本；首次准备需要 Pillow、fontTools 和 brotli，普通静态构建只需 Python 标准库。已有字形充分覆盖时保留字体文件，不为文案调整重复下载工具。
 

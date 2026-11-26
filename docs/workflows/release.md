@@ -15,7 +15,7 @@
 - `prerelease`：经维护者确认后显式发布预发布版，须关闭 `check_only`。可在开发/修复分支上运行，必须指定同仓库、同分支头成功的 PR CI，源码使用合法预发布版本，并提交 `docs/releases/<完整版本>.md`。不能用此开关发布无后缀的正式版本；两种模式同时勾选会在前置校验失败。
 - `linux_scope`：通用发布使用默认的 `supported`，覆盖 Ubuntu、Debian 和 Arch Linux x86_64。专项发布填实际面向的 Linux 套件，用逗号分隔（如 `debian,linuxmint,pop,zorin`）。Android 和 Ubuntu 始终验收。纳入 `fedora` 或 `opensuse` 时，按对应兼容矩阵的架构加入 RPM 及其 SHA256，RPM 收据绑定 CI 的同架构 DEB 摘要。纳入 `arch` 时，在 Release 附件加入 Arch 兼容验收使用的 `.pkg.tar.zst` 原件及其 SHA256，收据绑定 CI 的 x64 DEB 摘要。
 
-正式版还须根据[网站维护说明](../../website/README.md#每次发布都同步)同步双语版本记录、教程和安装包快照，并核对公开标签、日期及实际附件。预发布沿用现有网站内容。
+正式版还须根据[网站维护说明](../../website/README.md#每次发布都同步)同步双语版本记录、教程和安装包快照，并核对公开标签、日期及实际附件。中英 README 的 Windows 实测环境持续列明 Windows 11 x64；须依据实际验证或维护者提供的现场结果标记，缺少证据时写明待确认，不把 Windows Server runner 视为 Windows 11。预发布沿用现有网站内容。
 
 正式版和预发布版的文字按[发布文案模板](../releases/TEMPLATE.md)准备并随源码提交。发布程序校验该提交的文案后，在首段之后、更新详情之前放置完整下载区，避免 GitHub Releases 列表截断徽章链接。下载按钮引用[来源提交内的静态 SVG](../releases/badges/SOURCE.md)。每个安装包和下载计数均固定到本次标签及具体文件。下载量由 Shields.io 从 GitHub 读取，可能延迟更新，也包含重复下载与自动校验。每个安装包都有对应的 SHA256 附件。
 

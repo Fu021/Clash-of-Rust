@@ -13,13 +13,13 @@
   <div>
     <section id="gui">
       <h2>Window · GUI</h2>
-      <p>Available on Windows, Debian / Ubuntu, macOS and Android.</p>
+      <p>Available on Windows, Linux, macOS and Android.</p>
       <ol class="steps">
         <li><a href="download.html">Download and install</a> the package for your device, then open Clash of Rust.</li>
-        <li>Open Subscriptions, add a URL or import YAML, then choose Use. The app does not provide proxy servers.</li>
+        <li>Open Subscriptions and choose Import. Enter a name and subscription URL, or use the file picker to import YAML. Then choose Use to activate the subscription. The app does not provide proxy servers.</li>
         <li>Open Proxies, test latency and choose a member of a manual policy group. Automatic groups such as AUTO select their own member.</li>
         <li>Return Home, choose Rule mode and connect. Desktop supports system proxy or TUN; Android uses a VPN. Approve the operating system's request when prompted.</li>
-        <li>Check that the core is running, then inspect traffic in Connections. Use Network diagnostics if a site does not open.</li>
+        <li>Check that the core is running, then inspect traffic in Connections. Use Network diagnostics if a site does not open. On Android phones, both pages are usually under Tools.</li>
       </ol>
       {{shot:home}}
       <p>Phones and tablets use bottom navigation or a sidebar. Resolve any existing Android VPN conflict first. On desktop, closing the window leaves the tray running; choosing Quit ends the client.</p>
@@ -28,12 +28,12 @@
     <section id="tui">
       <h2>Terminal · TUI</h2>
       <p>Desktop installers include <code>cor</code>. Run it in an interactive terminal. <a href="cli.html#install">Cannot find cor?</a></p>
-      <pre class="term" aria-label="Open the terminal interface">cor ui</pre>
+      <pre class="term" aria-label="Open the terminal interface">cor</pre>
       <ol class="steps">
-        <li>Press <kbd>6</kbd> for Actions, find <code>profile add</code>, fill in a name and subscription URL or local path, then review and confirm.</li>
-        <li>Use <code>profile use</code> to choose that profile, then run <code>start</code>. Authorization opens in the normal terminal; press Enter afterwards to return.</li>
+        <li>Press <kbd>8</kbd> for Actions, find <code>profile add</code>, fill in a name and subscription URL or local path, then review and confirm.</li>
+        <li>Press <kbd>3</kbd> for Profiles, select the new profile and press Enter to open its form. Save and confirm, then choose Start backend and core on Home.</li>
         <li>Press <kbd>2</kbd> for Nodes, open a manual policy group with Enter, choose a member and confirm.</li>
-        <li>Run <code>proxy</code> in Actions and choose <code>system</code> or <code>tun</code>. TUN is recommended for headless servers.</li>
+        <li>On Home, select Proxy mode and confirm System proxy or TUN. Use TUN on a headless server. When system authorization is required, it opens in the normal terminal. Press Enter afterwards to return.</li>
         <li>Press <kbd>1</kbd> to check status. <kbd>q</kbd> exits the interface while the backend and proxy keep running.</li>
       </ol>
       {{terminal:home}}
@@ -58,7 +58,7 @@ cor status</pre>
         <div class="card"><h3>One site fails</h3><p>Start with the <a href="tools.html#check">website check</a>, then inspect <a href="tools.html#explain">rules and exit</a>.</p></div>
         <div class="card"><h3>An update fails</h3><p>Keep your configuration, resolve the reported cause and retry, or <a href="download.html">download an installer</a>.</p></div>
       </div>
-      <p>GUI, TUI and CLI share the current account's backend and configuration. Start with one interface and switch whenever you like.</p>
+      <p>On desktop, the GUI, TUI and CLI share the backend and configuration for the same account and data directory.</p>
     </section>
   </div>
 </div>

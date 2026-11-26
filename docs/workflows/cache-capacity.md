@@ -28,6 +28,12 @@
 
 2026-11-21 修正 Windows 保存和恢复使用的源码回执路径后，[CI 44943304678](https://github.com/Fu021/Clash-of-Rust/actions/runs/44943304678) 两个 Windows 作业均恢复了已有缓存。「编译、测试与导出」步骤 x64 从上一轮的 11 分 58 秒缩短到 33 秒，ARM64 从 9 分 38 秒缩短到 4 分 36 秒。Maven 同轮命中，仓库缓存约 9.90 GiB。早期 Maven 缓存消失的原因仍缺少服务端逐出或删除记录。
 
+2026-11-26 更新 Slint、Go 和 Gradle 后，[CI 45759645444](https://github.com/Fu021/Clash-of-Rust/actions/runs/45759645444) 13 项通过，耗时 40 分 40 秒。六个桌面 Rust 目标、两套 Linux 构建镜像和三个 Android Go 目标恢复缓存。Android 三个 Rust 目标和 Maven 缓存未命中，均重建并保存。最长步骤是 Android x64 编译，耗时 23 分 17 秒。收尾移除 8 条旧记录，缓存由 28.38 降到 17.57 GiB，保留的 19 条均属于 `main`。
+
+`0.7.3` 的 [CI 45766776690](https://github.com/Fu021/Clash-of-Rust/actions/runs/45766776690) 13 项通过。macOS Intel 恢复了约 2.09 GiB 的 `main` Rust 缓存，编译、测试和候选包上传通过。本轮 Rust 缓存归档在压缩时达到步骤的 5 分钟上限，保留上一份可用缓存。预算作业将缓存从 32.05 降到 18.82 GiB，移除 9 条，余下 19 条均属 `main`。清理后的只读复查显示 0 条待清理。
+
+正式版来源 `24a1c967` 的 [CI 45783249363](https://github.com/Fu021/Clash-of-Rust/actions/runs/45783249363) 13 项通过。九份 Rust 缓存均报告 `Cache up-to-date.`，包含 macOS Intel 和 ARM64。三个 Android Go 目标、共享 Maven 和两套 Linux 构建镜像均成功复用。[Memory Benchmark 45788967631](https://github.com/Fu021/Clash-of-Rust/actions/runs/45788967631) 的 Rust 缓存同样报告 `Cache up-to-date.`。两轮预算作业均无需移除条目，基准结束后共 19 条、19.19 GiB，均属 `main`，其中一条用于内存基准。
+
 ## main 基线与分支只读
 
 2026-11-11 的 CI `42978665228` 和 Memory `42978712845` 均通过。保留策略按用途合并新旧键名，每个目标仅保存 main 最新代。开发分支直接恢复可用基线，省掉差异归档的全目录扫描、构建后比较与叠加成本。

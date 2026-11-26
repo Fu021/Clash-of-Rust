@@ -1,10 +1,10 @@
 <!-- title: Clash of Rust：原生界面的 mihomo 客户端 -->
-<!-- description: 用 Rust 和 Slint 写的 mihomo 代理客户端，不带 WebView。支持 Windows、Debian/Ubuntu、macOS 和 Android，附带 cor 命令行和按需网络检查。 -->
+<!-- description: 用 Rust 和 Slint 写的 mihomo 代理客户端，不带 WebView。支持 Windows、Linux、macOS 和 Android，附带 cor 命令行和按需网络检查。 -->
 <section class="hero">
   <div class="wrap hero-copy">
     <h1>每一条连接，<br>都有清晰的去向。</h1>
     <p class="lead">一个原生的 mihomo 客户端。管好订阅，选好线路，也看清每条连接的来龙去脉。</p>
-    <p class="hero-benefit">关窗轻装常驻，客户端实测 <b>18.2 MiB</b>。 <a href="#memory">看实测</a></p>
+    <p class="hero-benefit">关窗后客户端实测 <b>{{memory:tray:client}} MiB PSS</b>。 <a href="#memory">看实测</a></p>
     <div class="actions">
       <a class="btn" href="download.html" data-download-button>下载安装包</a>
       <a class="btn ghost" href="{{repo}}" target="_blank" rel="noopener">{{star}}在 GitHub 点 Star<span data-stars></span></a>
@@ -32,8 +32,8 @@
       <div>
         <p>Rust 与 Slint 绘制原生界面。桌面关窗后释放界面进程，托盘与内核继续运行。</p>
         <dl class="facts" style="margin-top:1.6rem">
-          <div class="sleepers"><dt>四个平台</dt><dd>Windows、Debian / Ubuntu、macOS、Android。</dd></div>
-          <div class="sleepers"><dt>一个后台</dt><dd>窗口、托盘与命令行，共用后台和内核。</dd></div>
+          <div class="sleepers"><dt>四个平台</dt><dd>Windows、Linux、macOS、Android。</dd></div>
+          <div class="sleepers"><dt>桌面共用后台</dt><dd>窗口、托盘、终端界面和命令行共用后台与内核。</dd></div>
           <div class="sleepers"><dt>装完即用</dt><dd>自带内核与 Geo 数据，添加订阅即可开始。</dd></div>
         </dl>
       </div>
@@ -49,7 +49,7 @@
   <div class="wrap split">
     <div>
       <h2>换到终端，<br>依然顺手。</h2>
-      <p class="lead" style="margin-top:1.1rem">桌面安装包附带 <code>cor</code>。运行 <code>cor ui</code> 打开终端界面；脚本和 AI 可继续使用命令与 JSON。</p>
+      <p class="lead" style="margin-top:1.1rem">在交互终端运行 <code>cor</code> 打开终端界面。脚本和 AI 可使用命令与 JSON。</p>
 <pre class="term" aria-label="cor 的头几条命令"><span class="p">$ </span>cor profile add home 'https://example.com/subscription'
 <span class="p">$ </span>cor profile use home
 <span class="p">$ </span>cor start            <span class="c"># 在后台运行</span>
@@ -71,7 +71,7 @@
       <li class="sleepers"><h3>访问检测</h3><p>查看出口 IP，检查常用服务是否可达。</p><a href="guide.html#checks">指南：检测</a></li>
       <li class="sleepers" id="toolbox"><h3>网络工具</h3><p>从域名解析到连接耗时，按需检查，不擅自切换节点。</p><a href="tools.html">网络工具手册</a></li>
       <li class="sleepers"><h3>Claude 保护</h3><p>固定出口，减少连接绕行；关闭后恢复原有设置。</p><a href="guide.html#protection">指南：Claude 保护</a></li>
-      <li class="sleepers"><h3>更新</h3><p>在应用内下载更新，安装前自动校验。</p><a href="guide.html#updates">指南：更新</a></li>
+      <li class="sleepers"><h3>更新</h3><p>应用内检查更新。支持自更新的平台在安装前校验下载。</p><a href="guide.html#updates">指南：更新</a></li>
     </ul>
   </div>
 </section>

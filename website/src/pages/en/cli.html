@@ -10,7 +10,7 @@
     <section id="install">
       <h2>Find cor</h2>
       <p>Desktop installers include the core, Geo and CLI; no extra runtime is required. Android does not provide this desktop CLI.</p>
-      <div class="table-scroll"><table class="plain"><thead><tr><th>System</th><th>Entry</th></tr></thead><tbody><tr><th>Debian / Ubuntu</th><td>Run <code>cor</code> after installing the DEB, at <code>/usr/bin/cor</code>.</td></tr><tr><th>Windows</th><td>Run <code>cor.exe</code> in the installation directory, or add that directory to PATH.</td></tr><tr><th>macOS</th><td><code>/Applications/Clash of Rust.app/Contents/MacOS/cor</code>; optionally create your own PATH symlink.</td></tr></tbody></table></div>
+      <div class="table-scroll"><table class="plain"><thead><tr><th>System</th><th>Entry</th></tr></thead><tbody><tr><th>Linux</th><td>Install the appropriate DEB, RPM or Arch package, then run <code>cor</code>.</td></tr><tr><th>Windows</th><td>The installer adds PATH by default. Reopen your terminal and run <code>cor</code>. If you turned the option off, run <code>cor.exe</code> from the installation directory.</td></tr><tr><th>macOS</th><td>Open Clash of Rust from Applications once. Run <code>cor</code> in a new login shell, or run <code>Contents/MacOS/cor</code> inside the app bundle.</td></tr></tbody></table></div>
       <pre class="term" aria-label="Version and help">cor version
 cor help
 cor help all
@@ -106,8 +106,8 @@ cor update status
 cor geo status
 cor geo update</pre>
       <p>Stable releases are the default. <code>cor config set update_prereleases true</code> includes newer previews. The actual target is shown before confirmation; only preview targets carry a preview warning. Installer and Geo updates validate data and keep recovery evidence on failure.</p>
-      <p>Headless Linux authorizes in the terminal, waits for installation and restores the backend automatically. <code>--no-start</code> preserves the previous core on/off state. Other desktops hand off to a system installer; handoff is not installation success. Check <code>update status</code>.</p>
-      <p>Unattended systems can use <code>cor update download --output cor-update.deb</code> and ask an administrator to install; change the filename for your platform. <code>--timeout N</code> extends slow-network waits, default 300 seconds, maximum 3600.</p>
+      <p>When the GUI is closed, Linux DEB and official Arch installations can authorize and wait in the terminal using <code>dpkg</code> and <code>pacman -U</code> respectively. Success starts the backend and core. Failure restores the previous state. Use <code>--no-start</code> to preserve whether the core was running. Update Fedora and openSUSE RPMs with DNF and Zypper respectively.</p>
+      <p>For graphical installers, use <code>cor update status</code> to check the final result. On unattended systems, use <code>cor update download --output FILE</code> with the filename and extension for your platform, then ask an administrator to install the downloaded package. <code>--timeout N</code> extends slow-network waits. The default is 300 seconds and the maximum is 3600.</p>
     </section>
     <section id="services">
       <h2>Autostart and services</h2>

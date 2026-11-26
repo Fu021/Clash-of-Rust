@@ -1,5 +1,5 @@
 <!-- title: TUI manual — Clash of Rust -->
-<!-- description: The eight cor ui pages, keyboard controls, forms, system authorization, network tools and recovery, separate from GUI and scripting guides. -->
+<!-- description: The eight Clash of Rust terminal pages, keyboard controls, forms, system authorization, network tools and recovery. -->
 <section class="page-head">
   <div class="wrap"><h1>A guided interface in your terminal.</h1><p class="lead">Manage the same backend through lists and forms. Begin with the <a href="start.html#tui">TUI quick start</a>.</p>{{manuals}}</div>
   <div class="banner scene"><picture><source media="(max-width: 640px)" srcset="{{root}}assets/terminal-small.webp"><img src="{{root}}assets/terminal.webp" width="2172" height="724" alt="A blue cat watches an illuminated control panel in a railway signal box at night."></picture></div>
@@ -10,11 +10,11 @@
     <section id="first">
       <h2>Open and exit</h2>
       <p><a href="cli.html#install">Cannot find cor?</a> Check the installation location and command path first.</p>
-      <pre class="term" aria-label="Start or preview offline">cor ui
+      <pre class="term" aria-label="Start or preview offline">cor
 cor ui --demo</pre>
       <p>Windows, Linux and macOS installers include cor. Use a real interactive terminal. Demo mode uses fictional data, without network access or saving.</p>
-      <p>In 0.7.2, the layout follows terminal size, compresses narrow screens and prioritizes the focused item or confirmation in tiny windows. Long connection details scroll.</p>
-      <p>Opening, browsing and exiting do not start the backend or core. Use Actions to start one if needed. <kbd>q</kbd> / <kbd>Ctrl+C</kbd> exits while the existing backend and proxy remain running. Emoji rendering depends on your terminal font.</p>
+      <p>The layout adapts to terminal size. Very small windows prioritize the focused item or confirmation prompt. You can scroll through long connection details.</p>
+      <p>Opening and browsing the interface leave the backend and core in their current state. To start them, choose Start backend and core on Home or run <code>start</code> from Actions. <kbd>q</kbd> / <kbd>Ctrl+C</kbd> exits while the existing backend and proxy remain running. Emoji rendering depends on your terminal font.</p>
       {{terminal:home}}
     </section>
     <section id="keys">
@@ -34,12 +34,12 @@ cor ui --demo</pre>
       <dl class="facts">
         <div class="sleepers"><dt>1 · Home</dt><dd>Core and backend state, profile, reference chain, protection, rates and connection count.</dd></div>
         <div class="sleepers"><dt>2 · Nodes</dt><dd>Find groups and nodes, read latency and confirm a manual selection.</dd></div>
-        <div class="sleepers"><dt>3 · Connections</dt><dd>Filter active connections, inspect details and request closure.</dd></div>
-        <div class="sleepers"><dt>4 · Network</dt><dd>Choose an on-demand tool, enter its target and read the result.</dd></div>
-        <div class="sleepers"><dt>5 · Settings</dt><dd>Inspect values, edit supported fields, review and submit.</dd></div>
-        <div class="sleepers"><dt>6 · Actions</dt><dd>Forms generated from the command catalog cover profiles, rules, updates, services and more.</dd></div>
-        <div class="sleepers"><dt>7 · Profiles</dt><dd>View saved profiles and choose the current profile.</dd></div>
-        <div class="sleepers"><dt>8 · Shortcut rules</dt><dd>Manage shortcuts for the current profile and check which are already included.</dd></div>
+        <div class="sleepers"><dt>3 · Profiles</dt><dd>View saved profiles and choose the current profile.</dd></div>
+        <div class="sleepers"><dt>4 · Connections</dt><dd>Filter active connections, inspect details and request closure.</dd></div>
+        <div class="sleepers"><dt>5 · Rules</dt><dd>View profile, custom and shortcut rules, and manage supported entries.</dd></div>
+        <div class="sleepers"><dt>6 · Tools</dt><dd>Choose an on-demand tool, enter its target and read the result.</dd></div>
+        <div class="sleepers"><dt>7 · Settings</dt><dd>Inspect values, edit supported fields, review and submit.</dd></div>
+        <div class="sleepers"><dt>8 · Actions</dt><dd>Forms generated from the command catalog cover profiles, rules, updates, services and more.</dd></div>
       </dl>
       <p>Only the current page's data is read, sampled once a second. Drawing updates changed lines, without accumulating connection or command-output history.</p>
     </section>
@@ -51,26 +51,26 @@ cor ui --demo</pre>
     </section>
     <section id="connections">
       <h2>Connection details</h2>
-      <p>Press <kbd>3</kbd> and Enter on a connection for domains, destination IP/port, protocol, time, rule, actual path and traffic. <kbd>d</kbd> adds resolution details; <kbd>x</kbd> opens a close-connection confirmation.</p>
+      <p>Press <kbd>4</kbd> to open Connections, then Enter on a connection for domains, destination IP/port, protocol, time, rule, actual path and traffic. <kbd>d</kbd> adds resolution details; <kbd>x</kbd> opens a close-connection confirmation.</p>
       <p>If the connection disappears, the original ID is reported as unavailable; another connection is never substituted. The source application may reconnect after closure.</p>
       <p>Details include original and sniffed domains plus process information; no sniffed result is guessed, and fields the core did not provide are hidden. Lists prefer sniffed domains, and search covers both domains, IPs, rules and proxy chains. Use <kbd>↑</kbd> / <kbd>↓</kbd> to scroll wrapped details.</p>
     </section>
     <section id="network">
       <h2>Network tools</h2>
-      <p>Press <kbd>4</kbd>, choose a tool with <kbd>[</kbd> / <kbd>]</kbd>, then <kbd>/</kbd> to enter a target. Enter ends input; another Enter runs the check. Scroll with <kbd>↑</kbd> / <kbd>↓</kbd> and cancel with <kbd>Esc</kbd>.</p>
+      <p>Press <kbd>6</kbd> and choose a tool with <kbd>←</kbd> / <kbd>→</kbd>. Press <kbd>/</kbd> to enter a target. Press Enter to finish editing, then Enter again to run the check. Scroll with <kbd>↑</kbd> / <kbd>↓</kbd> and cancel with <kbd>Esc</kbd>.</p>
       {{terminal:network}}
-      <p>Version 0.7.2 has twelve checks, all requiring a target. Rule and exit is part of Website check. Individual traffic and node details are in Connections and Proxies; see the <a href="tools.html#runtime">tool guide</a>. Press <kbd>o</kbd> to edit applicable options: choose types and methods with arrow keys, apply, then press Enter to run. Switching tools restores defaults; results wrap to the terminal width and scroll one display line at a time. Press <kbd>e</kbd> and enter a file path to export the current JSON report without rerunning the check; write failures preserve the path for retry. Changing pages cancels and clears results.</p>
+      <p>All twelve checks require a target. Use Website check to see the rule and exit. The Connections and Proxies pages show individual traffic and node details. See the <a href="tools.html#runtime">tool guide</a>. Press <kbd>o</kbd> to edit applicable options. Choose types and methods with the arrow keys, apply your choices and press Enter to run. Switching tools restores default options. Results wrap to the terminal width and scroll one display line at a time. Press <kbd>e</kbd> and enter a file path to export the current JSON report. If writing fails, the path is kept for retry. Changing pages cancels the check and clears its results.</p>
       <p><a href="tools.html">Read the tools, options and limits →</a></p>
     </section>
     <section id="settings">
       <h2>Settings forms</h2>
-      <p>Press <kbd>5</kbd> to inspect settings. Drafts are submitted only after confirmation. Cancelling a field restores its previous value; leaving the form discards drafts. The backend still validates ranges, permission and current state.</p>
+      <p>Press <kbd>7</kbd> to inspect settings. Drafts are submitted only after confirmation. Cancelling a field restores its previous value; leaving the form discards drafts. The backend still validates ranges, permission and current state.</p>
       <p>Ports, DNS/Fake-IP, IPv6, UDP, update channels and intervals, and run mode have switches, choices or editors. Use <kbd>Enter</kbd>, Space or arrow keys to choose, then move down to Save settings and confirm. Ordinary settings save inside TUI and read back the result; failures keep drafts. Proxy and protection authorization still uses the normal terminal. GUI accent, font and tray preferences stay outside common terminal settings; advanced commands remain available.</p>
-      <p>Press <kbd>7</kbd> to choose and save the current profile, or <kbd>8</kbd> to manage shortcut rules. Rules already included by the profile cannot be added again. Profile source editing and complex rule operations remain available through Actions.</p>
+      <p>Press <kbd>3</kbd> to choose and save the current profile, or <kbd>5</kbd> to view rules and open shortcut rule management. Shortcuts already included by the profile cannot be added again. Profile source editing and complex rule operations remain available through Actions.</p>
     </section>
     <section id="manage">
       <h2>Actions and authorization</h2>
-      <p>Press <kbd>6</kbd> and search for an action such as <code>profile add</code>, <code>rule add</code>, <code>update install</code> or <code>service status</code>. Fill positional arguments and options separately, without shell quotes. Arrays use JSON; boolean options accept <code>true</code> or an empty field.</p>
+      <p>Press <kbd>8</kbd> and search for an action such as <code>profile add</code>, <code>rule add</code>, <code>update install</code> or <code>service status</code>. Fill positional arguments and options separately, without shell quotes. Arrays use JSON; boolean options accept <code>true</code> or an empty field.</p>
       <p>Confirmation temporarily restores the normal terminal for output, download progress and authorization. It skips neither confirmation nor system permission. Press Enter to return; software installation exits TUI after completion or handoff to release files that need replacement.</p>
       <p>Ctrl+C during authorization or a continuous command exits the whole CLI; already submitted work may continue. Foreground <code>run</code> and another <code>ui</code> session remain direct CLI entries.</p>
     </section>

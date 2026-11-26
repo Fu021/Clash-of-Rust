@@ -2,15 +2,15 @@
 
 `cor` 是 Clash of Rust 的无界面命令行客户端，适用于 Windows、Linux 和 macOS。它复用桌面端的内核管理、配置事务、规则、检测和系统集成，不依赖 Slint、托盘或显示服务器。
 
-运行 `cor ui` 打开[终端界面](cli/tui.md)，`cor ui --demo` 可离线预览。自 `0.7.3-dev.3.memory` 起，无参数调用 `cor` 时，标准输入和输出都是终端便打开界面，否则打印帮助。打开或退出界面不会启停代理。
+`0.7.3` 正式版可在交互终端运行 `cor` 打开[终端界面](cli/tui.md)。标准输入或输出不是终端时，无参数调用会打印帮助。也可运行 `cor ui`，用 `cor ui --demo` 离线预览。打开或退出界面不会启停代理。
 
 ## 安装与快速开始
 
-自 0.6.2 起，桌面安装包包含 `cor`、内核和 Geo 数据。下表中的 Windows 和 macOS 自动配置 PATH 自 `0.7.3-dev.3.memory` 起提供。
+自 0.6.2 起，桌面安装包包含 `cor`、内核和 Geo 数据。`0.7.3` 正式版的命令入口如下。
 
 | 系统 | 命令位置 |
 | --- | --- |
-| Ubuntu / Debian | 安装 DEB 后直接运行 `cor`（`/usr/bin/cor`）；自 0.6.6 起要求 Ubuntu 20.04+ |
+| Linux | 安装发行版对应的 DEB、RPM 或 [Arch 原生包](workflows/linux-expansion.md#arch-linux-原生包)，再运行 `cor`（`/usr/bin/cor`）。Ubuntu 需要 20.04 或更新版本。 |
 | Windows | 安装完成页默认勾选「将 cor 添加到 PATH」，重新打开终端后运行 `cor`。旧版升级会自动添加，后续升级保留已选偏好。 |
 | macOS | 将应用拖入「应用程序」后打开一次，再开一个登录终端运行 `cor`。 |
 
@@ -43,7 +43,7 @@ GUI 已运行时，CLI 通过带随机密钥的本机接口操作同一内核。
 
 默认 `cor help` 列出常用操作和 Agent 指南入口。`cor help all` 查看完整命令和通用选项。所有命令都支持 `--help`；`cor help profile`、`cor profile help` 和 `cor profile --help` 列出该组命令，节点组同样可用 `cor node help`。`profile import` 仍兼容原脚本，分组帮助优先展示同时支持 URL、文件和标准输入的 `profile add`。帮助与解析、补全来自同一份命令表。
 
-`cor agent guide` 自 `0.7.3-dev.3.memory` 起提供，输出随程序提供的 Markdown 指南，包含版本核对、只读排障、网络变更与诊断脱敏，以及仓库和文档入口。命令离线可用，不启动后台。`--lang=en` 可输出英文，`--json` 和 `--jsonl` 的 `data.markdown` 提供同一份正文。
+`0.7.3` 正式版提供 `cor agent guide`，输出随程序提供的 Markdown 指南，包含版本核对、只读排障、网络变更与诊断脱敏，以及仓库和文档入口。命令离线可用，不启动后台。`--lang=en` 可输出英文，`--json` 和 `--jsonl` 的 `data.markdown` 提供同一份正文。
 
 当前源码的帮助支持简体中文和英文。全新安装及升级后如未保存语言偏好，按系统语言列表选择第一种支持的语言，无匹配时使用英文。`cor config set language en` 保存英文偏好，`zh-CN` 保存简体中文，`system` 恢复跟随系统。`cor --lang=en help` 仅覆盖本次语言。
 

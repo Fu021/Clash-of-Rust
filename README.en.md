@@ -25,12 +25,12 @@
 
 Clash of Rust is a native proxy client built with **Rust + Slint + mihomo**. The desktop GUI, TUI, and `cor` command line share a backend. Android has a dedicated client.
 
-The table lists supported installs and tested environments for **stable release 0.7.2**.
+The table lists supported installs and tested environments for **stable release 0.7.3**.
 
 | Platform | Supported installs | Tested environments |
 | --- | --- | --- |
-| Windows | x64 / ARM64 | Windows desktop (x64), Windows 11 (ARM64), Windows Server 2025 (x64) |
-| Linux | Debian or Ubuntu 20.04+, amd64 / ARM64 | Ubuntu 20.04 and 22.04 (x64 / ARM64), 24.04 and 26.04 (x64) |
+| Windows | x64 / ARM64 | Windows Server 2025 (x64), Windows 11 (x64 / ARM64) |
+| Linux | DEB and RPM (x64 / ARM64), native Arch (x64) | Ubuntu 20.04+, Debian, Linux Mint, Pop!_OS, Zorin OS, Fedora, openSUSE, Arch Linux |
 | macOS | 14+, Intel / Apple Silicon | macOS 15.7.9 (Intel), 26.7.2 (Apple Silicon) |
 | Android | 8.0+, ARM64 / ARMv7 / x86_64 | Android 8.0 through 16 (11 x86_64 emulator versions) |
 
@@ -38,7 +38,7 @@ The table lists supported installs and tested environments for **stable release 
 
 | Feature | What you can do |
 | --- | --- |
-| 🖥️ Native interface | Light and dark themes, accent colors, grid and list views, and layouts for phones and tablets. |
+| 🖥️ Native interface | English and Simplified Chinese, light and dark themes, accent colors, grid and list views, and layouts for phones and tablets. |
 | ⌨️ Command line | Run headless on Windows, Linux, and macOS. Manage the client over SSH. |
 | 📱 Per-app routing | Include or exclude Android apps. Android 10+ can assign an app to a direct connection, policy group, or node. |
 | 🌐 Network diagnostics | Check exit IPs and connectivity to GitHub, AI services, and streaming platforms. Filter, rerun, and export reports. |
@@ -48,26 +48,41 @@ The table lists supported installs and tested environments for **stable release 
 
 ## Interface Preview
 
+Desktop component previews and an actual terminal frame from an isolated 0.7.3 test.
+
 | Home screen, light theme | Home screen, dark theme |
 | --- | --- |
-| [![Home screen, light theme](docs/images/home-0.7.0-light.png)](docs/images/home-0.7.0-light.png) | [![Home screen, dark theme](docs/images/home-0.7.0-dark.png)](docs/images/home-0.7.0-dark.png) |
+| [![Home screen, light theme](website/src/assets/app-home.png)](website/src/assets/app-home.png) | [![Home screen, dark theme](docs/images/home-0.7.3-dark.png)](docs/images/home-0.7.3-dark.png) |
 
 | TUI home screen |
 | :---: |
-| [![TUI home screen](docs/images/tui-0.7.2.png)](docs/images/tui-0.7.2.png) |
+| [![TUI home screen](docs/images/tui-0.7.3.png)](docs/images/tui-0.7.3.png) |
 
 ## Installation and Usage
 
-The table links to stable version 0.7.2. Find `.sha256` files and other versions on the [download page](https://clash-of-rust.fu021.shop/en/download) and in [GitHub Releases](https://github.com/Fu021/Clash-of-Rust/releases).
+The table links to stable version 0.7.3. Find `.sha256` files and other versions on the [download page](https://clash-of-rust.fu021.shop/en/download) and in [GitHub Releases](https://github.com/Fu021/Clash-of-Rust/releases).
 
 | Platform | Installers and download counts |
 | --- | --- |
-| Windows | [![Windows Setup x64](https://img.shields.io/badge/Setup-x64-0078D4)](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.2/Clash-of-Rust-0.7.2-windows-x64-setup.exe) [![Windows x64 downloads](https://img.shields.io/github/downloads/Fu021/Clash-of-Rust/v0.7.2/Clash-of-Rust-0.7.2-windows-x64-setup.exe?label=downloads&displayAssetName=false)](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.2/Clash-of-Rust-0.7.2-windows-x64-setup.exe)<br>[![Windows Setup ARM64](https://img.shields.io/badge/Setup-ARM64-0078D4)](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.2/Clash-of-Rust-0.7.2-windows-arm64-setup.exe) [![Windows ARM64 downloads](https://img.shields.io/github/downloads/Fu021/Clash-of-Rust/v0.7.2/Clash-of-Rust-0.7.2-windows-arm64-setup.exe?label=downloads&displayAssetName=false)](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.2/Clash-of-Rust-0.7.2-windows-arm64-setup.exe) |
-| Debian / Ubuntu 20.04+ | [![Linux DEB x64](https://img.shields.io/badge/DEB-x64-E95420?logo=linux&logoColor=white)](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.2/Clash-of-Rust-0.7.2-linux-amd64.deb) [![Linux x64 downloads](https://img.shields.io/github/downloads/Fu021/Clash-of-Rust/v0.7.2/Clash-of-Rust-0.7.2-linux-amd64.deb?label=downloads&displayAssetName=false)](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.2/Clash-of-Rust-0.7.2-linux-amd64.deb)<br>[![Linux DEB ARM64](https://img.shields.io/badge/DEB-ARM64-E95420?logo=linux&logoColor=white)](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.2/Clash-of-Rust-0.7.2-linux-arm64.deb) [![Linux ARM64 downloads](https://img.shields.io/github/downloads/Fu021/Clash-of-Rust/v0.7.2/Clash-of-Rust-0.7.2-linux-arm64.deb?label=downloads&displayAssetName=false)](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.2/Clash-of-Rust-0.7.2-linux-arm64.deb) |
-| macOS | [![macOS DMG Apple Silicon](https://img.shields.io/badge/DMG-Apple_Silicon-555555?logo=apple&logoColor=white)](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.2/Clash-of-Rust-0.7.2-macos-arm64.dmg) [![macOS Apple Silicon downloads](https://img.shields.io/github/downloads/Fu021/Clash-of-Rust/v0.7.2/Clash-of-Rust-0.7.2-macos-arm64.dmg?label=downloads&displayAssetName=false)](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.2/Clash-of-Rust-0.7.2-macos-arm64.dmg)<br>[![macOS DMG Intel](https://img.shields.io/badge/DMG-Intel_x64-555555?logo=apple&logoColor=white)](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.2/Clash-of-Rust-0.7.2-macos-x64.dmg) [![macOS Intel downloads](https://img.shields.io/github/downloads/Fu021/Clash-of-Rust/v0.7.2/Clash-of-Rust-0.7.2-macos-x64.dmg?label=downloads&displayAssetName=false)](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.2/Clash-of-Rust-0.7.2-macos-x64.dmg) |
-| Android | [![Android APK ARM64](https://img.shields.io/badge/APK-ARM64-3DDC84?logo=android&logoColor=white)](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.2/Clash-of-Rust-0.7.2-android-arm64.apk) [![Android ARM64 downloads](https://img.shields.io/github/downloads/Fu021/Clash-of-Rust/v0.7.2/Clash-of-Rust-0.7.2-android-arm64.apk?label=downloads&displayAssetName=false)](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.2/Clash-of-Rust-0.7.2-android-arm64.apk) (most phones and tablets)<br>[![Android APK ARMv7](https://img.shields.io/badge/APK-ARMv7-3DDC84?logo=android&logoColor=white)](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.2/Clash-of-Rust-0.7.2-android-armv7.apk) [![Android ARMv7 downloads](https://img.shields.io/github/downloads/Fu021/Clash-of-Rust/v0.7.2/Clash-of-Rust-0.7.2-android-armv7.apk?label=downloads&displayAssetName=false)](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.2/Clash-of-Rust-0.7.2-android-armv7.apk)<br>[![Android APK x64](https://img.shields.io/badge/APK-x64-3DDC84?logo=android&logoColor=white)](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.2/Clash-of-Rust-0.7.2-android-x64.apk) [![Android x64 downloads](https://img.shields.io/github/downloads/Fu021/Clash-of-Rust/v0.7.2/Clash-of-Rust-0.7.2-android-x64.apk?label=downloads&displayAssetName=false)](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.2/Clash-of-Rust-0.7.2-android-x64.apk) |
+| Windows | [![Windows Setup x64](docs/releases/badges/windows-x64.svg)][windows-x64] [![Windows x64 downloads](https://img.shields.io/github/downloads/Fu021/Clash-of-Rust/v0.7.3/Clash-of-Rust-0.7.3-windows-x64-setup.exe?label=downloads&displayAssetName=false)][windows-x64]<br>[![Windows Setup ARM64](docs/releases/badges/windows-arm64.svg)][windows-arm64] [![Windows ARM64 downloads](https://img.shields.io/github/downloads/Fu021/Clash-of-Rust/v0.7.3/Clash-of-Rust-0.7.3-windows-arm64-setup.exe?label=downloads&displayAssetName=false)][windows-arm64] |
+| Linux | [![Linux DEB x64](docs/releases/badges/linux-x64.svg)][linux-deb-x64] [![Linux DEB x64 downloads](https://img.shields.io/github/downloads/Fu021/Clash-of-Rust/v0.7.3/Clash-of-Rust-0.7.3-linux-amd64.deb?label=downloads&displayAssetName=false)][linux-deb-x64]<br>[![Linux DEB ARM64](docs/releases/badges/linux-arm64.svg)][linux-deb-arm64] [![Linux DEB ARM64 downloads](https://img.shields.io/github/downloads/Fu021/Clash-of-Rust/v0.7.3/Clash-of-Rust-0.7.3-linux-arm64.deb?label=downloads&displayAssetName=false)][linux-deb-arm64]<br>[![Linux RPM x64](docs/releases/badges/linux-rpm-x64.svg)][linux-rpm-x64] [![Linux RPM x64 downloads](https://img.shields.io/github/downloads/Fu021/Clash-of-Rust/v0.7.3/Clash-of-Rust-0.7.3-linux-x86_64.rpm?label=downloads&displayAssetName=false)][linux-rpm-x64]<br>[![Linux RPM ARM64](docs/releases/badges/linux-rpm-arm64.svg)][linux-rpm-arm64] [![Linux RPM ARM64 downloads](https://img.shields.io/github/downloads/Fu021/Clash-of-Rust/v0.7.3/Clash-of-Rust-0.7.3-linux-aarch64.rpm?label=downloads&displayAssetName=false)][linux-rpm-arm64]<br>[![Linux Arch pkg x64](docs/releases/badges/linux-arch-x64.svg)][linux-arch-x64] [![Linux Arch x64 downloads](https://img.shields.io/github/downloads/Fu021/Clash-of-Rust/v0.7.3/Clash-of-Rust-0.7.3-linux-x86_64.pkg.tar.zst?label=downloads&displayAssetName=false)][linux-arch-x64] |
+| macOS | [![macOS DMG Apple Silicon](docs/releases/badges/macos-arm64.svg)][macos-arm64] [![macOS Apple Silicon downloads](https://img.shields.io/github/downloads/Fu021/Clash-of-Rust/v0.7.3/Clash-of-Rust-0.7.3-macos-arm64.dmg?label=downloads&displayAssetName=false)][macos-arm64]<br>[![macOS DMG Intel x64](docs/releases/badges/macos-x64.svg)][macos-x64] [![macOS Intel x64 downloads](https://img.shields.io/github/downloads/Fu021/Clash-of-Rust/v0.7.3/Clash-of-Rust-0.7.3-macos-x64.dmg?label=downloads&displayAssetName=false)][macos-x64] |
+| Android | [![Android APK ARM64](docs/releases/badges/android-arm64.svg)][android-arm64] [![Android ARM64 downloads](https://img.shields.io/github/downloads/Fu021/Clash-of-Rust/v0.7.3/Clash-of-Rust-0.7.3-android-arm64.apk?label=downloads&displayAssetName=false)][android-arm64] (most phones and tablets)<br>[![Android APK ARMv7](docs/releases/badges/android-armv7.svg)][android-armv7] [![Android ARMv7 downloads](https://img.shields.io/github/downloads/Fu021/Clash-of-Rust/v0.7.3/Clash-of-Rust-0.7.3-android-armv7.apk?label=downloads&displayAssetName=false)][android-armv7]<br>[![Android APK x64](docs/releases/badges/android-x64.svg)][android-x64] [![Android x64 downloads](https://img.shields.io/github/downloads/Fu021/Clash-of-Rust/v0.7.3/Clash-of-Rust-0.7.3-android-x64.apk?label=downloads&displayAssetName=false)][android-x64] |
 
-On Windows, run the installer. On Debian or Ubuntu, run `sudo apt install ./package.deb` with the filename you downloaded. On macOS, drag the app from the DMG to Applications. On Android, install the APK and approve the first VPN connection. You can add a toggle to Quick Settings.
+[windows-x64]: https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.3/Clash-of-Rust-0.7.3-windows-x64-setup.exe
+[windows-arm64]: https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.3/Clash-of-Rust-0.7.3-windows-arm64-setup.exe
+[linux-deb-x64]: https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.3/Clash-of-Rust-0.7.3-linux-amd64.deb
+[linux-deb-arm64]: https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.3/Clash-of-Rust-0.7.3-linux-arm64.deb
+[linux-rpm-x64]: https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.3/Clash-of-Rust-0.7.3-linux-x86_64.rpm
+[linux-rpm-arm64]: https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.3/Clash-of-Rust-0.7.3-linux-aarch64.rpm
+[linux-arch-x64]: https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.3/Clash-of-Rust-0.7.3-linux-x86_64.pkg.tar.zst
+[macos-arm64]: https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.3/Clash-of-Rust-0.7.3-macos-arm64.dmg
+[macos-x64]: https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.3/Clash-of-Rust-0.7.3-macos-x64.dmg
+[android-arm64]: https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.3/Clash-of-Rust-0.7.3-android-arm64.apk
+[android-armv7]: https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.3/Clash-of-Rust-0.7.3-android-armv7.apk
+[android-x64]: https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.3/Clash-of-Rust-0.7.3-android-x64.apk
+
+On Windows, run the installer. On Linux, choose a DEB, RPM or native Arch package for your distribution and follow the [installation steps](https://clash-of-rust.fu021.shop/en/download#linux). On macOS, drag the app from the DMG to Applications. On Android, install the APK and approve the first VPN connection. You can add a toggle to Quick Settings.
 
 Open the app, import a subscription on the Subscriptions page, and select a node on the Proxies page. From Home, enable System Proxy or TUN. On Android, connect to the VPN from Home.
 
@@ -75,36 +90,36 @@ Upgrades preserve subscriptions and settings. The Windows uninstaller keeps data
 
 ## Command Line
 
-Desktop installers include `cor`. Run `cor ui` to open the terminal interface, `cor start` to start the backend, and `cor help` for available commands. On servers, run `cor proxy tun` to enable TUN. The first use may require system authorization.
+Desktop installers include `cor`. Run `cor` in an interactive terminal to open the terminal interface, `cor start` to start the backend, and `cor help` for available commands. On servers, run `cor proxy tun` to enable TUN. The first use may require system authorization.
 
-Starting with `0.7.3-dev.3.memory`, running `cor` in an interactive terminal also opens the terminal interface. When working with an AI agent, ask it to run `cor agent guide` first for the built-in guide. The Windows installer for this version adds `cor` to PATH by default. On macOS, drag the app into Applications and open it once to configure PATH for your user automatically. Open a new terminal to run `cor`.
+When working with an AI agent, ask it to run `cor agent guide` first. The Windows installer adds `cor` to PATH by default. On macOS, launch the app once from Applications to configure PATH for your user. Open a new login shell to run `cor`.
 
 ## Memory Usage
 
-Measured on **0.7.2** using Ubuntu 22.04 x64 and a release build with software rendering. The profile had 100 nodes, 5 policy groups, and 1,000 rules, with no application traffic. Values are peak MiB over 10 seconds per scenario.
+Measured on **0.7.3** using a release build on Ubuntu 22.04 x64 with Xvfb/X11. The profile had 100 nodes, 5 policy groups and 1,000 rules. Proxying and scheduled latency checks were off, and there was no application traffic. Values in MiB are observed 10-second peaks while the interface is open and resident readings about 60 seconds into each background scenario.
 
 | Scenario | Client RSS | Client PSS | Combined client and core PSS |
 | --- | ---: | ---: | ---: |
-| GUI home screen, tray available | 56.18 | 46.25 | 92.39 |
-| GUI closed, tray still running | 23.36 | 18.23 | 64.50 |
-| First open of the TUI home screen | 29.42 | 14.86 | 57.74 |
-| TUI closed after browsing pages | 18.25 | 14.53 | 61.15 |
-| TUI home screen reopened | 33.71 | 19.12 | 65.74 |
-| TUI closed again | 18.31 | 14.59 | 61.27 |
-| Headless CLI backend running | 15.65 | 11.93 | 54.68 |
+| GUI home screen, tray available | 56.39 | 46.70 | 94.57 |
+| GUI closed, tray still running | 22.69 | 17.76 | 65.64 |
+| GUI closed after 20 reopen cycles | 23.87 | 18.95 | 72.68 |
+| First open of the TUI home screen | 31.00 | 15.85 | 59.53 |
+| TUI exited after browsing pages | 17.12 | 13.44 | 60.57 |
+| TUI exited after 20 reopen cycles | 17.15 | 13.46 | 62.77 |
+| Headless CLI backend running | 16.48 | 12.79 | 56.44 |
 
-Client columns include the backend and any open GUI or TUI. The combined column adds the core. Closing the GUI or exiting the TUI ends the interface process while the backend and core keep running.
+Client columns include the backend and any open GUI or TUI. The combined column adds the core. Closing the GUI or exiting the TUI ends the interface process. The backend and core keep running, and their combined PSS stays above the headless CLI baseline.
 
 Other pages and quick-rule scenarios follow.
 
 | Scenario | Client RSS | Client PSS | Combined client and core PSS |
 | --- | ---: | ---: | ---: |
-| Proxy groups collapsed | 54.73 | 45.00 | 94.04 |
-| Node search | 65.77 | 56.04 | 108.07 |
-| Back to the home screen after searching | 58.01 | 48.28 | 100.70 |
-| Home screen with all five quick rules enabled | 55.18 | 45.33 | 109.68 |
+| Proxy groups collapsed | 55.20 | 45.57 | 97.47 |
+| Node search | 61.02 | 51.39 | 104.74 |
+| Back to the home screen after searching | 56.92 | 47.29 | 100.65 |
+| Home screen with all five quick rules enabled | 54.44 | 44.66 | 109.90 |
 
-RSS counts shared pages in full. PSS counts a proportional share. Actual usage varies with device, configuration, and traffic. [Raw benchmark results](https://github.com/Fu021/Clash-of-Rust/actions/runs/44103803255).
+RSS counts shared pages in full. PSS counts a proportional share. These are short Linux measurements. Actual usage varies with device, configuration and traffic. [Raw 0.7.3 benchmark results](https://github.com/Fu021/Clash-of-Rust/actions/runs/45788967631).
 
 ## Building and Packaging
 

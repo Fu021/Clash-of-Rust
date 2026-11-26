@@ -10,7 +10,7 @@
     <section id="install">
       <h2>找到 cor</h2>
       <p>桌面安装包已附带内核、Geo 与 CLI，不需要额外安装运行时。Android 不提供这个桌面命令行。</p>
-      <div class="table-scroll"><table class="plain"><thead><tr><th>系统</th><th>入口</th></tr></thead><tbody><tr><th>Debian / Ubuntu</th><td>安装 DEB 后运行 <code>cor</code>，路径为 <code>/usr/bin/cor</code>。</td></tr><tr><th>Windows</th><td>运行安装目录下的 <code>cor.exe</code>，或自行将该目录加入 PATH。</td></tr><tr><th>macOS</th><td><code>/Applications/Clash of Rust.app/Contents/MacOS/cor</code>，可自建 PATH 符号链接。</td></tr></tbody></table></div>
+      <div class="table-scroll"><table class="plain"><thead><tr><th>系统</th><th>入口</th></tr></thead><tbody><tr><th>Linux</th><td>安装对应的 DEB、RPM 或 Arch 包后运行 <code>cor</code>。</td></tr><tr><th>Windows</th><td>安装器默认添加 PATH，重新打开终端后运行 <code>cor</code>。取消此选项时可执行安装目录中的 <code>cor.exe</code>。</td></tr><tr><th>macOS</th><td>从“应用程序”打开一次 Clash of Rust，再开一个登录终端运行 <code>cor</code>。也可执行应用包内的 <code>Contents/MacOS/cor</code>。</td></tr></tbody></table></div>
       <pre class="term" aria-label="查看版本与帮助">cor version
 cor help
 cor help all
@@ -106,8 +106,8 @@ cor update status
 cor geo status
 cor geo update</pre>
       <p>默认只检查正式版；<code>cor config set update_prereleases true</code> 纳入更高版本预发布。确认前显示实际目标，仅预发布目标附风险提示。安装与 Geo 都先校验，失败保留恢复信息。</p>
-      <p>Linux 无窗口时在当前终端授权、等待安装并自动恢复后台；<code>--no-start</code> 保留原内核开关状态。其他桌面交给系统安装助手，助手启动不等于安装成功。用 <code>update status</code> 查看实际结果。</p>
-      <p>无人值守可用 <code>cor update download --output cor-update.deb</code> 下载后交管理员安装，按平台换文件名。慢网可用 <code>--timeout N</code> 延长等待，默认 300 秒、最大 3600。</p>
+      <p>Linux 的 DEB 和官方 Arch 包在 GUI 未运行时可在当前终端授权并等待安装，分别使用 <code>dpkg</code> 和 <code>pacman -U</code>。安装成功后启动后台和内核，失败则恢复原状态。加 <code>--no-start</code> 可保留原内核开关状态。Fedora 和 openSUSE 的 RPM 分别使用 DNF 和 Zypper 更新。</p>
+      <p>通过图形安装助手更新时，用 <code>cor update status</code> 查看最终结果。无人值守可用 <code>cor update download --output FILE</code> 下载支持的安装包后交管理员安装，按平台选择文件名和扩展名。慢网可用 <code>--timeout N</code> 延长等待，默认 300 秒、最大 3600。</p>
     </section>
     <section id="services">
       <h2>自启与服务</h2>

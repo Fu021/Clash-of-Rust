@@ -12,7 +12,7 @@ from unittest import mock
 from urllib.parse import unquote, urlsplit
 import xml.etree.ElementTree as ET
 import build
-from release_content import validate
+from release_content import OPTIONAL_SUFFIXES, validate
 
 REPO_ROOT = build.ROOT.parent
 
@@ -49,20 +49,45 @@ class SiteTests(unittest.TestCase):
         build.build()
     def test_current_snapshot(self):
         validate(self.data)
-    def test_optional_rpm_is_rendered_only_when_present(self):
-        snapshot = copy.deepcopy(self.data)
-        data = snapshot['downloads']['stable']
+    def test_home_benchmark_matches_the_release_and_readmes(self):
+        memory = json.loads((build.SRC/"content/memory.json").read_text(encoding="utf-8"))
+        self.assertEqual("v" + memory["version"], self.data["downloads"]["stable"]["tag"])
+        source = f'{build.REPO_URL}/actions/runs/{memory["run"]}'
+        for directory, readme_name, heading in (
+            ("", "README.md", "内存占用"),
+            ("en", "README.en.md", "Memory Usage"),
+        ):
+            with self.subTest(readme=readme_name):
+                homepage = (build.DIST/directory/"index.html").read_text(encoding="utf-8")
+                readme = (REPO_ROOT/readme_name).read_text(encoding="utf-8")
+                section = readme.split(f"\n## {heading}\n", 1)[1].split("\n## ", 1)[0]
+                memory_rows = re.findall(r"\| \d+\.\d+ \| (\d+\.\d+) \| (\d+\.\d+) \|", section)
+                self.assertIn(source, section)
+                self.assertIn(source, homepage)
+                hero = re.search(r'<p class="hero-benefit">.*?</p>', homepage)[0]
+                self.assertIn(f'<b>{memory["tray"]["client"]} MiB', hero)
+                for scenario in ("cli", "tray", "gui", "tui", "tui-exit"):
+                    client, total = memory[scenario]["client"], memory[scenario]["total"]
+                    self.assertIn((client, total), memory_rows)
+                    self.assertIn(f"<strong>{client}</strong> MiB", homepage)
+                    self.assertIn(f"{total} MiB</p>", homepage)
+    def test_optional_packages_are_rendered_only_when_present(self):
         body = (build.SRC/'pages/en/download.html').read_text()
-        suffix = 'linux-aarch64.rpm'
-        self.assertNotIn(suffix, build.render_downloads(body, snapshot))
-        data['sizes'][suffix] = 45 * 1048576
-        validate(snapshot)
-        rendered = build.render_downloads(body, snapshot)
-        self.assertIn(suffix + '.sha256', rendered)
-        self.assertIn('45.0 MiB', rendered)
-        data['sizes'][suffix] = 0
-        with self.assertRaises(ValueError):
-            validate(snapshot)
+        for suffix in OPTIONAL_SUFFIXES:
+            with self.subTest(suffix=suffix):
+                snapshot = copy.deepcopy(self.data)
+                sizes = snapshot['downloads']['stable']['sizes']
+                sizes.pop(suffix, None)
+                validate(snapshot)
+                self.assertNotIn(suffix, build.render_downloads(body, snapshot))
+                sizes[suffix] = 45 * 1048576
+                validate(snapshot)
+                rendered = build.render_downloads(body, snapshot)
+                self.assertIn(suffix + '.sha256', rendered)
+                self.assertIn('45.0 MiB', rendered)
+                sizes[suffix] = 0
+                with self.assertRaises(ValueError):
+                    validate(snapshot)
     def test_tool_catalog_matches_the_shared_cli_and_both_languages(self):
         catalog = json.loads((build.SRC/'content/tools.json').read_text())
         core = (REPO_ROOT/'crates/client-core/src/detection/tools/mod.rs').read_text()
@@ -162,13 +187,14 @@ class SiteTests(unittest.TestCase):
         for page in build.DIST.rglob('*.html'):
             self.assertNotIn(' style=', page.read_text(encoding='utf-8'))
     def test_stable_downloads_work_without_javascript(self):
-        tag = self.data['downloads']['stable']['tag']
+        stable = self.data['downloads']['stable']
+        tag = stable['tag']
         for language in ('', 'en'):
             parser = Document()
             parser.feed((build.DIST/language/'download.html').read_text(encoding='utf-8'))
             downloads = [ref for ref in parser.refs if '/releases/download/' + tag + '/' in ref]
-            self.assertEqual(len(downloads), 18)
-            for suffix in build.SUFFIXES:
+            self.assertEqual(len(downloads), 2 * len(stable['sizes']))
+            for suffix in stable['sizes']:
                 name = 'Clash-of-Rust-' + tag[1:] + '-' + suffix
                 self.assertTrue(any(ref.endswith('/' + name) for ref in downloads))
                 self.assertTrue(any(ref.endswith('/' + name + '.sha256') for ref in downloads))
@@ -270,6 +296,7 @@ class SiteTests(unittest.TestCase):
                 self.assertIn('data-capture-version=',source)
                 if page != 'guide':
                     self.assertIn('terminal-capture',source)
+                    self.assertRegex(source, r'terminal-rule">[ ─]+</span>')
                 self.assertNotIn('app-home-light.webp',source)
                 self.assertNotIn('app-network.webp',source)
     def test_preview_embeds_assets(self):

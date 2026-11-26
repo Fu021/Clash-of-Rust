@@ -1,5 +1,5 @@
 <!-- title: TUI 功能手册 — Clash of Rust -->
-<!-- description: cor ui 的八个页面、按键、表单、系统授权、网络工具与退出恢复，独立于 GUI 和脚本教程。 -->
+<!-- description: Clash of Rust 终端界面的八个页面、按键、表单、系统授权、网络工具与退出恢复。 -->
 <section class="page-head">
   <div class="wrap"><h1>在终端里，也能按步操作。</h1><p class="lead">用列表与表单管理同一后台，无需先记住命令。首次使用见<a href="start.html#tui">TUI 快速上手</a>。</p>{{manuals}}</div>
   <div class="banner scene"><picture><source media="(max-width: 640px)" srcset="{{root}}assets/terminal-small.webp"><img src="{{root}}assets/terminal.webp" width="2172" height="724" alt="夜色中的铁路调度室，蓝猫守着亮起的操作台。"></picture></div>
@@ -10,11 +10,11 @@
     <section id="first">
       <h2>打开与退出</h2>
       <p><a href="cli.html#install">找不到 cor 命令？</a>先检查安装位置与命令路径。</p>
-      <pre class="term" aria-label="启动或离线演示">cor ui
+      <pre class="term" aria-label="启动或离线演示">cor
 cor ui --demo</pre>
       <p>Windows、Linux、macOS 安装包附带 cor，需要真实交互终端。演示模式使用虚构数据，不联网、不保存。</p>
-      <p>0.7.2 的界面自动跟随终端大小，窄屏压缩，极小窗口优先保留焦点与确认内容，连接长详情可滚动。</p>
-      <p>打开、浏览和退出不自行启动后台或内核。没有后台时可在“操作”页启动；<kbd>q</kbd> / <kbd>Ctrl+C</kbd> 退出后，既有后台和代理继续运行。终端字体决定 emoji 是否可见。</p>
+      <p>界面随终端大小调整，极小窗口优先显示当前焦点与确认内容。较长的连接详情可滚动查看。</p>
+      <p>打开和浏览界面不会自行启动后台或内核。需要启动时可在首页选择“启动后台与内核”，或在“操作”页执行 <code>start</code>。<kbd>q</kbd> / <kbd>Ctrl+C</kbd> 退出后，既有后台和代理继续运行。终端字体决定 emoji 是否可见。</p>
       {{terminal:home}}
     </section>
     <section id="keys">
@@ -34,12 +34,12 @@ cor ui --demo</pre>
       <dl class="facts">
         <div class="sleepers"><dt>1 · 首页</dt><dd>内核与后台状态、订阅、参考策略链、保护、速率和连接数。</dd></div>
         <div class="sleepers"><dt>2 · 节点</dt><dd>搜索策略组与节点，查看延迟，在手动组中确认选择。</dd></div>
-        <div class="sleepers"><dt>3 · 连接</dt><dd>筛选活动连接，查看详情并进入关闭连接操作。</dd></div>
-        <div class="sleepers"><dt>4 · 网络</dt><dd>按需选择工具、填写目标、运行并查看当前结果。</dd></div>
-        <div class="sleepers"><dt>5 · 设置</dt><dd>查看设置值，编辑可修改项，检查后提交。</dd></div>
-        <div class="sleepers"><dt>6 · 操作</dt><dd>通过命令目录生成的表单管理订阅、规则、更新、服务等。</dd></div>
-        <div class="sleepers"><dt>7 · 订阅</dt><dd>查看已保存订阅，并选择当前订阅。</dd></div>
-        <div class="sleepers"><dt>8 · 快捷规则</dt><dd>管理当前订阅的快捷规则，并检查订阅中是否已包含。</dd></div>
+        <div class="sleepers"><dt>3 · 订阅</dt><dd>查看已保存订阅，并选择当前订阅。</dd></div>
+        <div class="sleepers"><dt>4 · 连接</dt><dd>筛选活动连接，查看详情并进入关闭连接操作。</dd></div>
+        <div class="sleepers"><dt>5 · 规则</dt><dd>查看订阅规则、自定义规则和快捷规则，并管理可修改的项目。</dd></div>
+        <div class="sleepers"><dt>6 · 工具</dt><dd>按需选择工具、填写目标、运行并查看当前结果。</dd></div>
+        <div class="sleepers"><dt>7 · 设置</dt><dd>查看设置值，编辑可修改项，检查后提交。</dd></div>
+        <div class="sleepers"><dt>8 · 操作</dt><dd>通过命令目录生成的表单管理订阅、规则、更新、服务等。</dd></div>
       </dl>
       <p>只读取当前页所需数据，每秒采样，绘制只更新变化行；不积累连接或命令输出历史。</p>
     </section>
@@ -51,26 +51,26 @@ cor ui --demo</pre>
     </section>
     <section id="connections">
       <h2>连接详情</h2>
-      <p>按 <kbd>3</kbd> 选中连接后回车，查看域名、目标 IP/端口、协议、时间、规则、实际线路和流量。<kbd>d</kbd> 补充解析详情，<kbd>x</kbd> 打开关闭连接确认。</p>
+      <p>按 <kbd>4</kbd> 进入连接页，选中连接后回车，查看域名、目标 IP/端口、协议、时间、规则、实际线路和流量。<kbd>d</kbd> 补充解析详情，<kbd>x</kbd> 打开关闭连接确认。</p>
       <p>连接已消失时会说明原 ID 已不可用，不把其他连接替换进详情。关闭后，原应用可能自动重新连接。</p>
       <p>详情包含原始域名、嗅探域名和进程，不猜测嗅探结果；内核未提供的空字段会隐藏。列表优先使用嗅探域名，搜索同时覆盖两种域名、IP、规则和代理链；<kbd>↑</kbd> / <kbd>↓</kbd> 滚动分行详情。</p>
     </section>
     <section id="network">
       <h2>网络工具</h2>
-      <p>按 <kbd>4</kbd>，用 <kbd>[</kbd> / <kbd>]</kbd> 切换工具。<kbd>/</kbd> 输入目标，回车结束输入，再按回车运行；<kbd>↑</kbd> / <kbd>↓</kbd> 滚动结果，<kbd>Esc</kbd> 取消。</p>
+      <p>按 <kbd>6</kbd>，用 <kbd>←</kbd> / <kbd>→</kbd> 切换工具。按 <kbd>/</kbd> 输入目标，回车结束输入，再按回车运行。用 <kbd>↑</kbd> / <kbd>↓</kbd> 滚动结果，按 <kbd>Esc</kbd> 取消。</p>
       {{terminal:network}}
-      <p>0.7.2 提供十二项检查，全部需要目标；规则与出口并入网站检查。连接流量和节点信息分别位于连接页与代理页详情，详见<a href="tools.html#runtime">工具说明</a>。按 <kbd>o</kbd> 编辑当前工具的适用参数，左右键切换类型与方法，应用后按 Enter 检查；切换工具恢复默认，结果随宽度折行并逐行滚动。按 <kbd>e</kbd> 填写文件路径，导出本次 JSON 报告，不重新运行检查；写入失败可保留路径重试。切页取消并清除结果。</p>
+      <p>十二项检查都需要目标，规则与出口可通过网站检查查看。连接流量和节点信息分别位于连接页与代理页详情，详见<a href="tools.html#runtime">工具说明</a>。按 <kbd>o</kbd> 编辑当前工具的适用参数，用左右键切换类型与方法，应用后按 Enter 检查。切换工具会恢复默认参数。结果随宽度折行，可逐行滚动。按 <kbd>e</kbd> 填写文件路径并导出本次 JSON 报告，写入失败可保留路径重试。切页会取消检查并清除结果。</p>
       <p><a href="tools.html">逐项查看工具、参数与限制 →</a></p>
     </section>
     <section id="settings">
       <h2>设置表单</h2>
-      <p>按 <kbd>5</kbd> 查看设置；编辑中的草稿不会自动写盘，确认后才提交。取消本项恢复编辑前内容，退出表单丢弃草稿。后台仍会校验数值、权限与当前状态。</p>
+      <p>按 <kbd>7</kbd> 查看设置；编辑中的草稿不会自动写盘，确认后才提交。取消本项恢复编辑前内容，退出表单丢弃草稿。后台仍会校验数值、权限与当前状态。</p>
       <p>端口、DNS/Fake-IP、IPv6、UDP、更新通道与周期、运行模式等设置提供开关、候选值或编辑框，用 <kbd>Enter</kbd>、空格或左右键选择，向下选“保存设置”并确认。普通设置在界面内保存并读回实际结果，失败保留草稿；代理与保护仍经普通终端完成授权。GUI 强调色、字体和托盘配置不进入终端常用设置，高级命令继续保留。</p>
-      <p>按 <kbd>7</kbd> 选择并保存当前订阅；按 <kbd>8</kbd> 管理快捷规则，已由订阅包含的规则不能重复添加。订阅来源编辑及复杂规则操作仍可从操作页进入。</p>
+      <p>按 <kbd>3</kbd> 选择并保存当前订阅；按 <kbd>5</kbd> 查看规则并进入快捷规则管理，已由订阅包含的快捷规则不能重复添加。订阅来源编辑及复杂规则操作仍可从操作页进入。</p>
     </section>
     <section id="manage">
       <h2>操作与授权</h2>
-      <p>按 <kbd>6</kbd> 搜索操作，例如 <code>profile add</code>、<code>rule add</code>、<code>update install</code>、<code>service status</code>。位置参数与选项分别填写，字段内不需要 shell 引号；数组使用 JSON，布尔选项填 <code>true</code> 或留空。</p>
+      <p>按 <kbd>8</kbd> 搜索操作，例如 <code>profile add</code>、<code>rule add</code>、<code>update install</code>、<code>service status</code>。位置参数与选项分别填写，字段内不需要 shell 引号；数组使用 JSON，布尔选项填 <code>true</code> 或留空。</p>
       <p>确认后暂时回到普通终端，显示结果、下载进度或系统授权，不跳过确认与系统权限。完成后按 Enter 返回；安装完成或交接后退出 TUI，以释放需要被替换的程序。</p>
       <p>授权或持续命令期间 Ctrl+C 会退出整个 CLI，已提交操作仍以实际状态为准。前台调试 <code>run</code> 和再次打开 <code>ui</code> 不放入表单。</p>
     </section>

@@ -6,7 +6,7 @@ import re
 SUFFIXES = ('windows-x64-setup.exe', 'windows-arm64-setup.exe', 'linux-amd64.deb',
             'linux-arm64.deb', 'macos-arm64.dmg', 'macos-x64.dmg',
             'android-arm64.apk', 'android-armv7.apk', 'android-x64.apk')
-OPTIONAL_SUFFIXES = ('linux-x86_64.rpm', 'linux-aarch64.rpm')
+OPTIONAL_SUFFIXES = ('linux-x86_64.rpm', 'linux-aarch64.rpm', 'linux-x86_64.pkg.tar.zst')
 
 def validate(data):
     date.fromisoformat(data['checked'])

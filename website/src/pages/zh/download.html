@@ -1,5 +1,5 @@
 <!-- title: 下载 Clash of Rust -->
-<!-- description: Clash of Rust 的 Windows、Debian/Ubuntu、macOS、Android 安装包，直接来自 GitHub Releases，附安装步骤和 SHA256 校验方法。 -->
+<!-- description: Clash of Rust 的 Windows、Linux、macOS 和 Android 安装包，直接来自 GitHub Releases，附安装步骤和 SHA256 校验方法。 -->
 <section class="page-head">
   <div class="wrap">
     <h1>下载，安装，开始连接。</h1>
@@ -26,16 +26,23 @@
         <div>
           <ul class="pkgs" data-pkgs></ul>
           <p class="how">运行安装程序，按提示完成。覆盖安装旧版本时，订阅和个人设置都会保留。</p>
+          <p class="how">安装器默认将 <code>cor</code> 加入 PATH。装好后重新打开终端即可运行。</p>
           <p class="how">Defender 告警时先<a href="#verify">核对 SHA256</a>，再按<a href="{{docs}}/workflows/release.md#windows-defender-告警" target="_blank" rel="noopener">告警说明</a>处理。</p>
         </div>
       </section>
 
       <section class="os" id="linux" data-os="linux">
-        <div><h2>Debian / Ubuntu</h2><p>Ubuntu 20.04 及以上</p><span class="yours" data-yours></span></div>
+        <div><h2>Linux</h2><p>DEB、RPM 与 Arch 原生包</p><span class="yours" data-yours></span></div>
         <div>
           <ul class="pkgs" data-pkgs></ul>
-          <p class="how">在保存文件的目录里运行 <code>sudo apt install ./安装包文件名.deb</code>。装完之后，终端里就有 <code>cor</code> 命令。</p>
-          <p class="how">不确定架构？运行 <code>dpkg --print-architecture</code> 就能看到。</p>
+          <p class="how">在下载目录执行对应的命令，将示例文件名替换为实际文件名。</p>
+          <ul>
+            <li>Debian、Ubuntu 20.04 及以上和兼容发行版使用 <code>sudo apt install ./package.deb</code></li>
+            <li>Fedora 使用 <code>sudo dnf install ./package.rpm</code></li>
+            <li>openSUSE 使用 <code>sudo zypper install ./package.rpm</code></li>
+            <li>Arch Linux x86_64 使用 <code>sudo pacman -U ./package.pkg.tar.zst</code></li>
+          </ul>
+          <p class="how">用 <code>uname -m</code> 查看架构。<code>x86_64</code> 对应 x64 或 amd64，<code>aarch64</code> 对应 ARM64。安装后可运行 <code>cor</code>。</p>
         </div>
       </section>
 
@@ -43,7 +50,7 @@
         <div><h2>macOS</h2><p>macOS 14 及以上</p><span class="yours" data-yours></span></div>
         <div>
           <ul class="pkgs" data-pkgs></ul>
-          <p class="how">打开 DMG，把 Clash of Rust 拖进“应用程序”，再从那里启动。</p>
+          <p class="how">打开 DMG，把 Clash of Rust 拖进“应用程序”，再从那里启动一次。应用会为当前用户配置 PATH，打开新的登录终端即可运行 <code>cor</code>。</p>
           <p class="how">应用没有经过 Apple 公证，第一次打开会被系统拦下。按 <a href="https://support.apple.com/zh-cn/102445" target="_blank" rel="noopener">Apple 的说明</a>，在“隐私与安全性”里放行。</p>
         </div>
       </section>
@@ -66,11 +73,11 @@
 Get-FileHash .\安装包文件名.exe -Algorithm SHA256
 
 <span class="c"># Linux</span>
-sha256sum 安装包文件名.deb
+sha256sum 安装包文件名
 
 <span class="c"># macOS</span>
 shasum -a 256 安装包文件名.dmg</pre>
-    <p>应用内更新时，客户端也会先做同样的校验，再安装。</p>
+    <p>应用内更新会先校验摘要。Fedora 和 openSUSE 通过各自的包管理器安装新版 RPM。</p>
   </section>
 
   <section id="next">
@@ -82,8 +89,8 @@ shasum -a 256 安装包文件名.dmg</pre>
     <h2>常见问题</h2>
     <div class="qa">
       <details><summary>有 iOS 版吗？</summary><p>没有。仓库里只有 iOS 的界面原型，不提供可以安装的包。</p></details>
-      <details><summary>其他 Linux 发行版能用吗？</summary><p>目前只发布 DEB 包，验证范围是 Debian 和 Ubuntu 20.04 及以上。其他发行版需要自己从源码构建，见仓库里的开发文档。</p></details>
-      <details><summary>没有桌面环境的 Linux 能用吗？</summary><p>能。DEB 包里带有 <code>cor</code>，它不需要显示器。运行 <code>cor start</code>，服务器上建议用 TUN。</p></details>
+      <details><summary>哪些 Linux 发行版经过验证？</summary><p>0.7.3 在 Ubuntu、Debian、Linux Mint、Pop!_OS、Zorin OS、Fedora、openSUSE 和 Arch Linux 通过基础代理与 TUN 验证。各版本的验证范围见对应的发行说明。</p></details>
+      <details><summary>没有桌面环境的 Linux 能用吗？</summary><p>能。Linux 安装包带有 <code>cor</code>，无需显示器。运行 <code>cor start</code>，服务器上建议用 TUN。</p></details>
       <details><summary>升级会丢设置吗？</summary><p>不会。升级保留订阅和个人设置。Windows 的卸载程序可以选择删除全部数据，这一项默认不勾选。</p></details>
     </div>
   </section>

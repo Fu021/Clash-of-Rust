@@ -61,10 +61,10 @@ The Java helper also carries local IME compatibility changes:
 - On API 26–29, exclude stable system bars when choosing the keyboard edge.
   Navigation bars alone must report no keyboard, including landscape side bars;
   a real keyboard retains its full occlusion for the shared layout to subtract
-the bottom safe area once. In 1.19.1 this remains a local change in
-`dispatchLayoutInsets`; upstream still compares the raw system-bar occlusion.
+  the bottom safe area once. In 1.19.1 this remains a local change in
+  `dispatchLayoutInsets`; upstream still compares the raw system-bar occlusion.
 
-The 1.19.0 rebase retains the published Java package, JNI class name, input
+The local 1.19.1 crate retains the published Java package, JNI class name, input
 timestamps, text-selection behavior, clipboard handling, system-bar contrast,
 reduced-motion preference and low-memory GPU cleanup. It adapts the local
 surface recovery to `render_transformed` and keyboard cleanup to `hideCursor`;
@@ -79,9 +79,7 @@ The historical 1.18.1 CI on `3dd1f87` passed the production keyboard, layout, Ba
 rotation and lifecycle regressions on API 31 and 36. The earlier Gboard
 null-pointer crash did not recur, so the native cold-start controls did not run
 and its cause remains unconfirmed. Physical-device and OEM verification remain
-pending; historical multi-version results do not validate the 1.19.0 rebase
-or prove all-device compatibility. The 1.19.1 upgrade needs its own device
-verification for those interaction paths.
+pending. These interaction paths still need device verification on 1.19.1.
 The upstream crate license files remain authoritative.
 
 Remove this override after updating Slint to a release containing equivalent

@@ -20,7 +20,7 @@
     <h2>Choose a tool. Enter a target. Read the result.</h2>
     <p>Open Network diagnostics, choose a tool and enter a domain or URL. Options and results stay in one card; leaving the page clears them.</p>
     {{shot:network}}
-    <details class="benchmark-details"><summary>See the terminal interface</summary><div class="benchmark-body">{{terminal:network}}<p>Run <code>cor ui</code>, press <kbd>4</kbd>, use <kbd>[</kbd> / <kbd>]</kbd> to choose a tool, <kbd>/</kbd> to enter a target and <kbd>Enter</kbd> to run it.</p></div></details>
+    <details class="benchmark-details"><summary>See the terminal interface</summary><div class="benchmark-body">{{terminal:network}}<p>Run <code>cor</code>, press <kbd>6</kbd> and use <kbd>←</kbd> / <kbd>→</kbd> to choose a tool. Press <kbd>/</kbd> to enter a target, then Enter to finish and Enter again to run.</p></div></details>
     <div class="interface-links"><a href="guide.html#checks">GUI manual</a><a href="tui.html#network">TUI manual</a><a href="cli.html#network">CLI manual</a><a href="#check">Explore the checks ↓</a></div>
   </section>
   <section id="choose">
@@ -86,10 +86,10 @@
     <h2>Where to find it</h2>
     <table class="plain">
       <tbody>
-        <tr><th scope="row">Window</th><td>Under 工具 (Tools), open 网络诊断 (Network diagnostics). Input, action and result share one card.</td></tr>
+        <tr><th scope="row">Desktop window</th><td>Open Network diagnostics directly from the sidebar. Input, action and result share one card.</td></tr>
         <tr><th scope="row">Android</th><td>The same tools, reached from the Tools entry. Route trace depends on the system having traceroute.</td></tr>
         <tr><th scope="row">Command line</th><td><code>cor network</code> followed by the tool and its target, on Windows, Linux and macOS.</td></tr>
-        <tr><th scope="row">Terminal interface</th><td>Run <code>cor ui</code> and press <kbd>4</kbd>. <kbd>[</kbd> and <kbd>]</kbd> change tool, <kbd>/</kbd> enters the target, <kbd>Enter</kbd> runs it and <kbd>Esc</kbd> cancels.</td></tr>
+        <tr><th scope="row">Terminal interface</th><td>Run <code>cor</code> and press <kbd>6</kbd> to open Tools. Use <kbd>←</kbd> / <kbd>→</kbd> to change tools. Press <kbd>/</kbd> to enter a target, then Enter to finish and Enter again to run. Press <kbd>Esc</kbd> to cancel.</td></tr>
       </tbody>
     </table>
     <p style="margin-top:1.4rem"><a class="more" href="download.html">Download stable</a> · <a href="{{docs}}/network-tools.md" target="_blank" rel="noopener">Technical details (Chinese)</a></p>

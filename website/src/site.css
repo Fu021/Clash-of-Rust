@@ -605,6 +605,7 @@ main { animation: page-enter .24s ease-out both; }
 .interface-links { display:flex; flex-wrap:wrap; gap:.7rem; margin-top:1.1rem; }
 .terminal-title { padding:.6rem 1rem; border:1px solid #294047; border-bottom:0; border-radius:var(--radius) var(--radius) 0 0; background:#1b3037; color:#bcd2ce; font:.8rem/1.5 var(--pixel); }
 .terminal-capture { margin:0; padding:1rem; white-space:pre-wrap; overflow-wrap:anywhere; border:1px solid #294047; border-radius:0 0 var(--radius) var(--radius); background:#0b1518; color:#dfe9e2; font:.8rem/1.55 var(--pixel); tab-size:4; }
+.terminal-capture .terminal-rule { display:inline-block; max-inline-size:100%; overflow:hidden; white-space:pre; vertical-align:top; }
 .terminal-capture .tone-muted { color:#9ab2aa; }
 .terminal-capture .tone-accent { color:#71d1ab; }
 .terminal-capture .tone-warning { color:#efad88; }

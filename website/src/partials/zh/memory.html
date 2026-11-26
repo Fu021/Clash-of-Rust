@@ -3,18 +3,18 @@
     <h2>少占一点，长久相伴。</h2>
     <p class="lead">关闭 GUI 或退出 TUI，释放对应界面进程；后台与内核继续工作。</p>
     <dl class="memory-stats">
-      <div><dt>纯命令行</dt><dd><strong>11.93</strong> MiB <span>客户端 PSS</span><p>含内核合计 54.68 MiB</p></dd></div>
-      <div><dt>关闭 GUI、驻留托盘</dt><dd><strong>18.23</strong> MiB <span>客户端 PSS</span><p>含内核合计 64.50 MiB</p></dd></div>
-      <div><dt>GUI 首页</dt><dd><strong>46.25</strong> MiB <span>客户端 PSS</span><p>含内核合计 92.39 MiB</p></dd></div>
+      <div><dt>纯命令行</dt><dd><strong>{{memory:cli:client}}</strong> MiB <span>客户端 PSS</span><p>含内核合计 {{memory:cli:total}} MiB</p></dd></div>
+      <div><dt>关闭 GUI、驻留托盘</dt><dd><strong>{{memory:tray:client}}</strong> MiB <span>客户端 PSS</span><p>含内核合计 {{memory:tray:total}} MiB</p></dd></div>
+      <div><dt>GUI 首页</dt><dd><strong>{{memory:gui:client}}</strong> MiB <span>客户端 PSS</span><p>含内核合计 {{memory:gui:total}} MiB</p></dd></div>
     </dl>
     <dl class="memory-stats memory-tui">
-      <div><dt>首次打开 TUI 首页</dt><dd><strong>14.86</strong> MiB <span>客户端 PSS</span><p>含内核合计 57.74 MiB</p></dd></div>
-      <div><dt>浏览各页后关闭 TUI</dt><dd><strong>14.53</strong> MiB <span>客户端 PSS</span><p>含内核合计 61.15 MiB</p></dd></div>
+      <div><dt>首次打开 TUI 首页</dt><dd><strong>{{memory:tui:client}}</strong> MiB <span>客户端 PSS</span><p>含内核合计 {{memory:tui:total}} MiB</p></dd></div>
+      <div><dt>浏览各页后退出 TUI</dt><dd><strong>{{memory:tui-exit:client}}</strong> MiB <span>客户端 PSS</span><p>含内核合计 {{memory:tui-exit:total}} MiB</p></dd></div>
     </dl>
-    <p class="benchmark-context">0.7.2 · Ubuntu 22.04 x64 · PSS 峰值。TUI 退出后合计内存未完全回落。</p>
+    <p class="benchmark-context">{{memory:version}} · Ubuntu 22.04 x64。退出 TUI 后，合计 PSS 仍高于纯命令行基线。</p>
     <details class="benchmark-details">
       <summary>测试条件与来源</summary>
-      <div class="benchmark-body"><p>Release 构建、Slint 软件渲染、mihomo v1.19.33；100 节点、5 策略组、1,000 条规则，无业务流量。客户端含后台和当前 GUI/TUI 进程，不含内核，合计另列。每场景采样 10 秒、间隔 250 毫秒；GUI 开关来自同一托盘客户端，TUI 打开与退出来自独立的终端生命周期测试。仅为 Linux 短时基准。<a href="{{repo}}#内存占用">完整基准 ↗</a></p></div>
+      <div class="benchmark-body"><p>Release 构建，GUI 运行于 Xvfb/X11，内核为 Mihomo 1.19.34。配置含 100 个节点、5 个策略组、1,000 条规则，无业务流量。客户端 PSS 统计后台和当前 GUI/TUI 进程，合计另纳入内核。前台取 10 秒内的观测峰值，后台取场景开始后约 60 秒的驻留值。<a href="{{repo}}/actions/runs/{{memory:run}}">原始基准 ↗</a></p></div>
     </details>
   </div>
 </section>

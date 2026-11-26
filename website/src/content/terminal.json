@@ -3,7 +3,7 @@
     "source": "actual-cor-pty",
     "lines": [
       {
-        "text": "  CLASH OF RUST   /   TERMINAL   演示 · 不连接后台",
+        "text": "  CLASH OF RUST   /   TERMINAL   本机控制台",
         "tone": "accent"
       },
       {
@@ -11,11 +11,11 @@
         "tone": "plain"
       },
       {
-        "text": "  [1 首页]      2 节点       3 连接       4 网络",
+        "text": "  [1 首页]      2 节点       3 订阅       4 连接",
         "tone": "accent"
       },
       {
-        "text": "   5 设置       6 操作       7 订阅       8 快捷规则",
+        "text": "   5 规则       6 工具       7 设置       8 操作",
         "tone": "accent"
       },
       {
@@ -23,47 +23,47 @@
         "tone": "muted"
       },
       {
-        "text": "  ● 内核运行中   ·   CLI 后台   ·   0.7.2",
+        "text": "  首页 · Enter 操作，修改前确认",
         "tone": "accent"
       },
       {
-        "text": "",
-        "tone": "plain"
-      },
-      {
-        "text": "  代理方式      TUN · 规则模式",
-        "tone": "plain"
-      },
-      {
-        "text": "  当前订阅      演示订阅",
-        "tone": "plain"
-      },
-      {
-        "text": "  参考线路      PROXY → AUTO → 🇺🇸 美国 02",
+        "text": "  内核运行中 · CLI 后台 · 0.7.3",
         "tone": "accent"
       },
       {
-        "text": "  Claude 保护   已关闭",
+        "text": "  ↓ 下载 0.0 KiB/s · ↑ 上传 0.0 KiB/s · 连接 0",
         "tone": "plain"
       },
       {
-        "text": "",
-        "tone": "plain"
-      },
-      {
-        "text": "  ↓ 下载  22.2 KiB/s     ↑ 上传  137.7 KiB/s     连接  6",
-        "tone": "plain"
-      },
-      {
-        "text": "",
-        "tone": "plain"
-      },
-      {
-        "text": "  规则模式可有多个出口；连接页展示逐连接的实际规则与线路。",
+        "text": "  参考线路：DIRECT",
         "tone": "muted"
       },
       {
-        "text": "",
+        "text": "  › 停止内核",
+        "tone": "selected"
+      },
+      {
+        "text": "    语言/language · 简体中文",
+        "tone": "plain"
+      },
+      {
+        "text": "    代理方式 · 关闭",
+        "tone": "plain"
+      },
+      {
+        "text": "    运行模式 · 规则",
+        "tone": "plain"
+      },
+      {
+        "text": "    当前订阅 · Memory workload",
+        "tone": "plain"
+      },
+      {
+        "text": "    Claude 保护 · 关闭",
+        "tone": "plain"
+      },
+      {
+        "text": "    检查更新 · 未检查 · 自动检查已关闭",
         "tone": "plain"
       },
       {
@@ -111,26 +111,26 @@
         "tone": "muted"
       },
       {
-        "text": "退出界面保留后台和代理；按 1–8 或 Tab 切换页面",
+        "text": "退出界面保留后台和代理",
         "tone": "muted"
       },
       {
-        "text": "r 刷新 · q 退出",
+        "text": "↑↓ 选择 · Enter 操作 · r 刷新 · q 退出",
         "tone": "muted"
       },
       {
-        "text": "v0.7.2 · 本机后台 · 每秒采样，变化时绘制",
+        "text": "v0.7.3 · 本机后台 · 每秒采样，变化时绘制",
         "tone": "muted"
       }
     ],
-    "version": "0.7.2",
-    "commit": "141e1cbd670af2e31d95c2f8e43e39f4bb312eaa"
+    "version": "0.7.3",
+    "commit": "24a1c967eb26c3943641b5fad463a33cb159011c"
   },
   "network": {
     "source": "actual-cor-pty",
     "lines": [
       {
-        "text": "  CLASH OF RUST   /   TERMINAL   演示 · 不连接后台",
+        "text": "  CLASH OF RUST   /   TERMINAL   本机控制台",
         "tone": "accent"
       },
       {
@@ -138,11 +138,11 @@
         "tone": "plain"
       },
       {
-        "text": "   1 首页       2 节点       3 连接      [4 网络]",
+        "text": "   1 首页       2 节点       3 订阅       4 连接",
         "tone": "accent"
       },
       {
-        "text": "   5 设置       6 操作       7 订阅       8 快捷规则",
+        "text": "   5 规则      [6 工具]      7 设置       8 操作",
         "tone": "accent"
       },
       {
@@ -238,19 +238,19 @@
         "tone": "muted"
       },
       {
-        "text": "退出界面保留后台和代理；按 1–8 或 Tab 切换页面",
+        "text": "退出界面保留后台和代理",
         "tone": "muted"
       },
       {
-        "text": "[ ] 工具 · o 参数 · e 导出 · / 输入 · Enter 检查 · ↑↓ 结果 · Esc 取消 · q 退出",
+        "text": "←→ 切换工具 · o 参数 · e 导出 · / 输入 · Enter 检查 · ↑↓ 结果 · Esc 取消 · q 退出",
         "tone": "muted"
       },
       {
-        "text": "v0.7.2 · 本机后台 · 每秒采样，变化时绘制",
+        "text": "v0.7.3 · 本机后台 · 每秒采样，变化时绘制",
         "tone": "muted"
       }
     ],
-    "version": "0.7.2",
-    "commit": "141e1cbd670af2e31d95c2f8e43e39f4bb312eaa"
+    "version": "0.7.3",
+    "commit": "24a1c967eb26c3943641b5fad463a33cb159011c"
   }
 }

@@ -1,0 +1,9 @@
+{
+  "version": "0.7.3",
+  "run": "45788967631",
+  "cli": {"client": "12.79", "total": "56.44"},
+  "tray": {"client": "17.76", "total": "65.64"},
+  "gui": {"client": "46.70", "total": "94.57"},
+  "tui": {"client": "15.85", "total": "59.53"},
+  "tui-exit": {"client": "13.44", "total": "60.57"}
+}

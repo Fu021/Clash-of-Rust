@@ -87,7 +87,8 @@ def render_terminal(name, lang, frames):
     for line in frame["lines"]:
         if line["tone"] not in tones:
             raise ValueError("Invalid terminal tone")
-        lines.append(f'<span class="tone-{line["tone"]}">{escape(line["text"])}</span>')
+        rule = " terminal-rule" if re.fullmatch(r"─+", line["text"].strip()) else ""
+        lines.append(f'<span class="tone-{line["tone"]}{rule}">{escape(line["text"])}</span>')
     label = "实际终端画面 · 固定测试输入" if lang == "zh" else "Actual terminal frame · Fixed test input"
     return (f'<figure class="product-shot terminal-shot" data-capture-version="{escape(frame["version"])}">'
             '<div class="terminal-title" aria-hidden="true">cor ui</div>'
@@ -176,13 +177,13 @@ def render_tools(kind, lang, data, root):
                     usage_label = "操作示例"
                     usage = (f'<summary>GUI、TUI 与 CLI 示例</summary>'
                              f'<p><b>GUI：</b>在“工具 → 网络诊断”选择“{name}”，输入 <code>{example}</code> 后运行。</p>'
-                             f'<p><b>TUI：</b>运行 <code>cor ui</code>，按 <kbd>4</kbd> 并用 <kbd>[</kbd> / <kbd>]</kbd> 选择“{name}”；按 <kbd>/</kbd> 输入 <code>{example}</code>，回车结束输入，再按回车运行。</p>'
+                             f'<p><b>TUI：</b>运行 <code>cor</code>，按 <kbd>6</kbd> 并用 <kbd>←</kbd> / <kbd>→</kbd> 选择“{name}”。按 <kbd>/</kbd> 输入 <code>{example}</code>，回车结束输入，再按回车运行。</p>'
                              f'<p><b>CLI：</b><code>{command}</code></p>')
                 else:
                     usage_label = "Usage examples"
                     usage = (f'<summary>GUI, TUI and CLI examples</summary>'
                              f'<p><b>GUI:</b> Under Tools → Network diagnostics, select {name}, enter <code>{example}</code> and run the check.</p>'
-                             f'<p><b>TUI:</b> Run <code>cor ui</code>, press <kbd>4</kbd> and use <kbd>[</kbd> / <kbd>]</kbd> to select {name}; press <kbd>/</kbd>, enter <code>{example}</code>, press Enter to finish input, then Enter again to run.</p>'
+                             f'<p><b>TUI:</b> Run <code>cor</code>, press <kbd>6</kbd> and use <kbd>←</kbd> / <kbd>→</kbd> to select {name}. Press <kbd>/</kbd>, enter <code>{example}</code> and press Enter to finish input. Press Enter again to run.</p>'
                              f'<p><b>CLI:</b> <code>{command}</code></p>')
                 parts.append(
                     f'<article class="tool" id="{tool["id"]}"><div class="tool-side"><h3>{escape(copy["name"])}</h3>'
@@ -293,6 +294,7 @@ def layout(lang, page, title, description, body, release_data):
 def build():
     data = json.loads((SRC / "content" / "tools.json").read_text(encoding="utf-8"))
     release_data = json.loads((SRC / "content" / "releases.json").read_text(encoding="utf-8"))
+    memory = json.loads((SRC / "content" / "memory.json").read_text(encoding="utf-8"))
     captures = json.loads((SRC / "content" / "screenshots.json").read_text(encoding="utf-8"))
     terminal = json.loads((SRC / "content" / "terminal.json").read_text(encoding="utf-8"))
     validate(release_data)
@@ -327,6 +329,9 @@ def build():
             if page == "index":
                 for block in ("memory", "showcase"):
                     body = body.replace("{{"+block+"}}", (SRC / "partials" / lang / (block+".html")).read_text(encoding="utf-8"))
+                body = body.replace("{{memory:version}}", escape(memory["version"])).replace("{{memory:run}}", escape(memory["run"]))
+                body = re.sub(r"\{\{memory:([\w-]+):(client|total)\}\}",
+                              lambda match: escape(memory[match[1]][match[2]]), body)
             body = body.replace("{{releases:home}}", render_releases(release_data, lang, REPO_URL, compact=True))
             manual_labels = ("窗口 GUI", "终端 TUI", "命令行 CLI") if lang == "zh" else ("Window · GUI", "Terminal · TUI", "Commands · CLI")
             manuals = '<nav class="manual-nav" aria-label="' + ("手册类型" if lang == "zh" else "Manuals") + '">'

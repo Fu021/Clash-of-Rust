@@ -25,12 +25,12 @@
 
 Clash of Rust 是基于 **Rust + Slint + mihomo** 的原生代理客户端。桌面 GUI、TUI 和 `cor` 命令行共用后台，Android 提供独立客户端。
 
-下表列出 **0.7.2 正式版**的安装范围和实测环境。
+下表列出 **0.7.3 正式版**的安装范围和实测环境。
 
 | 平台 | 安装支持 | 实测环境 |
 | --- | --- | --- |
-| Windows | x64 / ARM64 | Windows 桌面版（x64）、Windows 11（ARM64）、Windows Server 2025（x64） |
-| Linux | Debian 或 Ubuntu 20.04+，amd64 / ARM64 | Ubuntu 20.04 和 22.04（x64 / ARM64）、24.04 和 26.04（x64） |
+| Windows | x64 / ARM64 | Windows Server 2025（x64）、Windows 11（x64 / ARM64） |
+| Linux | DEB、RPM（x64 / ARM64），Arch 原生包（x64） | Ubuntu 20.04+、Debian、Linux Mint、Pop!_OS、Zorin OS、Fedora、openSUSE、Arch Linux |
 | macOS | 14+，Intel / Apple Silicon | macOS 15.7.9（Intel）、26.7.2（Apple Silicon） |
 | Android | 8.0+，ARM64 / ARMv7 / x86_64 | Android 8.0 至 16（11 个 x86_64 模拟器版本） |
 
@@ -38,7 +38,7 @@ Clash of Rust 是基于 **Rust + Slint + mihomo** 的原生代理客户端。桌
 
 | 功能 | 能做什么 |
 | --- | --- |
-| 🖥️ 原生界面 | 深浅主题、强调色、宫格与列表，适配手机和平板。 |
+| 🖥️ 原生界面 | 简体中文与英文、深浅主题、强调色、宫格与列表，适配手机和平板。 |
 | ⌨️ 命令行 | 支持 Windows、Linux、macOS 无界面运行，可通过 SSH 操作。 |
 | 📱 应用分流 | Android 可纳入或排除应用。Android 10+ 可为单个应用指定直连、策略组或节点。 |
 | 🌐 网络检测 | 检查出口 IP 及 GitHub、AI 和流媒体连通性，支持筛选、重测和导出报告。 |
@@ -48,26 +48,41 @@ Clash of Rust 是基于 **Rust + Slint + mihomo** 的原生代理客户端。桌
 
 ## 界面预览
 
+0.7.3 的桌面组件预览和隔离测试中的实际终端画面。
+
 | 浅色首页 | 深色首页 |
 | --- | --- |
-| [![浅色首页](docs/images/home-0.7.0-light.png)](docs/images/home-0.7.0-light.png) | [![深色首页](docs/images/home-0.7.0-dark.png)](docs/images/home-0.7.0-dark.png) |
+| [![浅色首页](website/src/assets/app-home.png)](website/src/assets/app-home.png) | [![深色首页](docs/images/home-0.7.3-dark.png)](docs/images/home-0.7.3-dark.png) |
 
 | TUI 首页 |
 | :---: |
-| [![TUI](docs/images/tui-0.7.2.png)](docs/images/tui-0.7.2.png) |
+| [![TUI 首页](docs/images/tui-0.7.3.png)](docs/images/tui-0.7.3.png) |
 
 ## 安装与使用
 
-下表提供 0.7.2 正式版安装包。`.sha256` 校验文件和其他版本见[下载页](https://clash-of-rust.fu021.shop/download)及 [GitHub Releases](https://github.com/Fu021/Clash-of-Rust/releases)。
+下表提供 0.7.3 正式版安装包。`.sha256` 校验文件和其他版本见[下载页](https://clash-of-rust.fu021.shop/download)及 [GitHub Releases](https://github.com/Fu021/Clash-of-Rust/releases)。
 
 | 平台 | 安装包与下载次数 |
 | --- | --- |
-| Windows | [![Windows Setup x64](https://img.shields.io/badge/Setup-x64-0078D4)](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.2/Clash-of-Rust-0.7.2-windows-x64-setup.exe) [![Windows x64 downloads](https://img.shields.io/github/downloads/Fu021/Clash-of-Rust/v0.7.2/Clash-of-Rust-0.7.2-windows-x64-setup.exe?label=downloads&displayAssetName=false)](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.2/Clash-of-Rust-0.7.2-windows-x64-setup.exe)<br>[![Windows Setup ARM64](https://img.shields.io/badge/Setup-ARM64-0078D4)](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.2/Clash-of-Rust-0.7.2-windows-arm64-setup.exe) [![Windows ARM64 downloads](https://img.shields.io/github/downloads/Fu021/Clash-of-Rust/v0.7.2/Clash-of-Rust-0.7.2-windows-arm64-setup.exe?label=downloads&displayAssetName=false)](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.2/Clash-of-Rust-0.7.2-windows-arm64-setup.exe) |
-| Debian / Ubuntu 20.04+ | [![Linux DEB x64](https://img.shields.io/badge/DEB-x64-E95420?logo=linux&logoColor=white)](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.2/Clash-of-Rust-0.7.2-linux-amd64.deb) [![Linux x64 downloads](https://img.shields.io/github/downloads/Fu021/Clash-of-Rust/v0.7.2/Clash-of-Rust-0.7.2-linux-amd64.deb?label=downloads&displayAssetName=false)](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.2/Clash-of-Rust-0.7.2-linux-amd64.deb)<br>[![Linux DEB ARM64](https://img.shields.io/badge/DEB-ARM64-E95420?logo=linux&logoColor=white)](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.2/Clash-of-Rust-0.7.2-linux-arm64.deb) [![Linux ARM64 downloads](https://img.shields.io/github/downloads/Fu021/Clash-of-Rust/v0.7.2/Clash-of-Rust-0.7.2-linux-arm64.deb?label=downloads&displayAssetName=false)](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.2/Clash-of-Rust-0.7.2-linux-arm64.deb) |
-| macOS | [![macOS DMG Apple Silicon](https://img.shields.io/badge/DMG-Apple_Silicon-555555?logo=apple&logoColor=white)](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.2/Clash-of-Rust-0.7.2-macos-arm64.dmg) [![macOS Apple Silicon downloads](https://img.shields.io/github/downloads/Fu021/Clash-of-Rust/v0.7.2/Clash-of-Rust-0.7.2-macos-arm64.dmg?label=downloads&displayAssetName=false)](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.2/Clash-of-Rust-0.7.2-macos-arm64.dmg)<br>[![macOS DMG Intel](https://img.shields.io/badge/DMG-Intel_x64-555555?logo=apple&logoColor=white)](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.2/Clash-of-Rust-0.7.2-macos-x64.dmg) [![macOS Intel downloads](https://img.shields.io/github/downloads/Fu021/Clash-of-Rust/v0.7.2/Clash-of-Rust-0.7.2-macos-x64.dmg?label=downloads&displayAssetName=false)](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.2/Clash-of-Rust-0.7.2-macos-x64.dmg) |
-| Android | [![Android APK ARM64](https://img.shields.io/badge/APK-ARM64-3DDC84?logo=android&logoColor=white)](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.2/Clash-of-Rust-0.7.2-android-arm64.apk) [![Android ARM64 downloads](https://img.shields.io/github/downloads/Fu021/Clash-of-Rust/v0.7.2/Clash-of-Rust-0.7.2-android-arm64.apk?label=downloads&displayAssetName=false)](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.2/Clash-of-Rust-0.7.2-android-arm64.apk) （多数手机和平板）<br>[![Android APK ARMv7](https://img.shields.io/badge/APK-ARMv7-3DDC84?logo=android&logoColor=white)](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.2/Clash-of-Rust-0.7.2-android-armv7.apk) [![Android ARMv7 downloads](https://img.shields.io/github/downloads/Fu021/Clash-of-Rust/v0.7.2/Clash-of-Rust-0.7.2-android-armv7.apk?label=downloads&displayAssetName=false)](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.2/Clash-of-Rust-0.7.2-android-armv7.apk)<br>[![Android APK x64](https://img.shields.io/badge/APK-x64-3DDC84?logo=android&logoColor=white)](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.2/Clash-of-Rust-0.7.2-android-x64.apk) [![Android x64 downloads](https://img.shields.io/github/downloads/Fu021/Clash-of-Rust/v0.7.2/Clash-of-Rust-0.7.2-android-x64.apk?label=downloads&displayAssetName=false)](https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.2/Clash-of-Rust-0.7.2-android-x64.apk) |
+| Windows | [![Windows Setup x64](docs/releases/badges/windows-x64.svg)][windows-x64] [![Windows x64 downloads](https://img.shields.io/github/downloads/Fu021/Clash-of-Rust/v0.7.3/Clash-of-Rust-0.7.3-windows-x64-setup.exe?label=downloads&displayAssetName=false)][windows-x64]<br>[![Windows Setup ARM64](docs/releases/badges/windows-arm64.svg)][windows-arm64] [![Windows ARM64 downloads](https://img.shields.io/github/downloads/Fu021/Clash-of-Rust/v0.7.3/Clash-of-Rust-0.7.3-windows-arm64-setup.exe?label=downloads&displayAssetName=false)][windows-arm64] |
+| Linux | [![Linux DEB x64](docs/releases/badges/linux-x64.svg)][linux-deb-x64] [![Linux DEB x64 downloads](https://img.shields.io/github/downloads/Fu021/Clash-of-Rust/v0.7.3/Clash-of-Rust-0.7.3-linux-amd64.deb?label=downloads&displayAssetName=false)][linux-deb-x64]<br>[![Linux DEB ARM64](docs/releases/badges/linux-arm64.svg)][linux-deb-arm64] [![Linux DEB ARM64 downloads](https://img.shields.io/github/downloads/Fu021/Clash-of-Rust/v0.7.3/Clash-of-Rust-0.7.3-linux-arm64.deb?label=downloads&displayAssetName=false)][linux-deb-arm64]<br>[![Linux RPM x64](docs/releases/badges/linux-rpm-x64.svg)][linux-rpm-x64] [![Linux RPM x64 downloads](https://img.shields.io/github/downloads/Fu021/Clash-of-Rust/v0.7.3/Clash-of-Rust-0.7.3-linux-x86_64.rpm?label=downloads&displayAssetName=false)][linux-rpm-x64]<br>[![Linux RPM ARM64](docs/releases/badges/linux-rpm-arm64.svg)][linux-rpm-arm64] [![Linux RPM ARM64 downloads](https://img.shields.io/github/downloads/Fu021/Clash-of-Rust/v0.7.3/Clash-of-Rust-0.7.3-linux-aarch64.rpm?label=downloads&displayAssetName=false)][linux-rpm-arm64]<br>[![Linux Arch pkg x64](docs/releases/badges/linux-arch-x64.svg)][linux-arch-x64] [![Linux Arch x64 downloads](https://img.shields.io/github/downloads/Fu021/Clash-of-Rust/v0.7.3/Clash-of-Rust-0.7.3-linux-x86_64.pkg.tar.zst?label=downloads&displayAssetName=false)][linux-arch-x64] |
+| macOS | [![macOS DMG Apple Silicon](docs/releases/badges/macos-arm64.svg)][macos-arm64] [![macOS Apple Silicon downloads](https://img.shields.io/github/downloads/Fu021/Clash-of-Rust/v0.7.3/Clash-of-Rust-0.7.3-macos-arm64.dmg?label=downloads&displayAssetName=false)][macos-arm64]<br>[![macOS DMG Intel x64](docs/releases/badges/macos-x64.svg)][macos-x64] [![macOS Intel x64 downloads](https://img.shields.io/github/downloads/Fu021/Clash-of-Rust/v0.7.3/Clash-of-Rust-0.7.3-macos-x64.dmg?label=downloads&displayAssetName=false)][macos-x64] |
+| Android | [![Android APK ARM64](docs/releases/badges/android-arm64.svg)][android-arm64] [![Android ARM64 downloads](https://img.shields.io/github/downloads/Fu021/Clash-of-Rust/v0.7.3/Clash-of-Rust-0.7.3-android-arm64.apk?label=downloads&displayAssetName=false)][android-arm64] （多数手机和平板）<br>[![Android APK ARMv7](docs/releases/badges/android-armv7.svg)][android-armv7] [![Android ARMv7 downloads](https://img.shields.io/github/downloads/Fu021/Clash-of-Rust/v0.7.3/Clash-of-Rust-0.7.3-android-armv7.apk?label=downloads&displayAssetName=false)][android-armv7]<br>[![Android APK x64](docs/releases/badges/android-x64.svg)][android-x64] [![Android x64 downloads](https://img.shields.io/github/downloads/Fu021/Clash-of-Rust/v0.7.3/Clash-of-Rust-0.7.3-android-x64.apk?label=downloads&displayAssetName=false)][android-x64] |
 
-Windows 运行安装程序。Debian/Ubuntu 运行 `sudo apt install ./安装包文件名.deb`。macOS 将 DMG 内的应用拖入「应用程序」。Android 安装 APK 后，在首次连接时允许 VPN 授权，可在系统快捷设置中添加开关磁贴。
+[windows-x64]: https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.3/Clash-of-Rust-0.7.3-windows-x64-setup.exe
+[windows-arm64]: https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.3/Clash-of-Rust-0.7.3-windows-arm64-setup.exe
+[linux-deb-x64]: https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.3/Clash-of-Rust-0.7.3-linux-amd64.deb
+[linux-deb-arm64]: https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.3/Clash-of-Rust-0.7.3-linux-arm64.deb
+[linux-rpm-x64]: https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.3/Clash-of-Rust-0.7.3-linux-x86_64.rpm
+[linux-rpm-arm64]: https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.3/Clash-of-Rust-0.7.3-linux-aarch64.rpm
+[linux-arch-x64]: https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.3/Clash-of-Rust-0.7.3-linux-x86_64.pkg.tar.zst
+[macos-arm64]: https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.3/Clash-of-Rust-0.7.3-macos-arm64.dmg
+[macos-x64]: https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.3/Clash-of-Rust-0.7.3-macos-x64.dmg
+[android-arm64]: https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.3/Clash-of-Rust-0.7.3-android-arm64.apk
+[android-armv7]: https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.3/Clash-of-Rust-0.7.3-android-armv7.apk
+[android-x64]: https://github.com/Fu021/Clash-of-Rust/releases/download/v0.7.3/Clash-of-Rust-0.7.3-android-x64.apk
+
+Windows 运行安装程序。Linux 按发行版选择 DEB、RPM 或 Arch 原生包，命令见[安装与校验](https://clash-of-rust.fu021.shop/download#linux)。macOS 将 DMG 内的应用拖入「应用程序」。Android 安装 APK 后，在首次连接时允许 VPN 授权，可在系统快捷设置中添加开关磁贴。
 
 打开应用后，在「订阅」页导入订阅，在「代理」页选择节点，再从首页启用系统代理或 TUN。Android 从首页连接 VPN。
 
@@ -75,36 +90,36 @@ Windows 运行安装程序。Debian/Ubuntu 运行 `sudo apt install ./安装包�
 
 ## 命令行
 
-桌面安装包均附带 `cor`。运行 `cor ui` 打开终端界面，`cor start` 启动后台，`cor help` 查看命令。在服务器上可运行 `cor proxy tun` 启用 TUN，首次开启可能需要系统授权。
+桌面安装包均附带 `cor`。在交互终端运行 `cor` 打开终端界面，`cor start` 启动后台，`cor help` 查看命令。在服务器上可运行 `cor proxy tun` 启用 TUN，首次开启可能需要系统授权。
 
-自 `0.7.3-dev.3.memory` 起，交互终端中直接运行 `cor` 也能打开终端界面。让 AI Agent 协助时，可让它先运行 `cor agent guide` 阅读内置指南。该版本的 Windows 安装器默认将 `cor` 加入 PATH。macOS 将应用拖入「应用程序」并打开一次后，会静默为当前用户配置 PATH。之后打开新终端即可运行 `cor`。
+让 AI Agent 协助时，可让它先运行 `cor agent guide` 阅读内置指南。Windows 安装器默认将 `cor` 加入 PATH。macOS 从「应用程序」打开一次后，会为当前用户配置 PATH。之后打开新的登录终端即可运行 `cor`。
 
 ## 内存占用
 
-**0.7.2** 在 Ubuntu 22.04 x64 的 Release 软件渲染实测，配置含 100 个节点、5 个策略组、1,000 条规则，无业务流量。每个场景采样 10 秒，表中为峰值（MiB）。
+**0.7.3** 在 Ubuntu 22.04 x64、Xvfb/X11 的 Release 构建上测量。配置含 100 个节点、5 个策略组、1,000 条规则，关闭代理和定时测速，无业务流量。前台为 10 秒内的观测峰值，后台为该场景开始后约 60 秒的驻留值，单位 MiB。
 
 | 场景 | 客户端 RSS | 客户端 PSS | 客户端与内核合计 PSS |
 | --- | ---: | ---: | ---: |
-| GUI 首页、托盘可用 | 56.18 | 46.25 | 92.39 |
-| 关闭 GUI、驻留托盘 | 23.36 | 18.23 | 64.50 |
-| 首次打开 TUI 首页 | 29.42 | 14.86 | 57.74 |
-| 浏览各页后关闭 TUI | 18.25 | 14.53 | 61.15 |
-| 再次打开 TUI 首页 | 33.71 | 19.12 | 65.74 |
-| 再次关闭 TUI | 18.31 | 14.59 | 61.27 |
-| 纯 CLI 后台运行 | 15.65 | 11.93 | 54.68 |
+| GUI 首页、托盘可用 | 56.39 | 46.70 | 94.57 |
+| 关闭 GUI、驻留托盘 | 22.69 | 17.76 | 65.64 |
+| GUI 重开 20 次后关闭 | 23.87 | 18.95 | 72.68 |
+| 首次打开 TUI 首页 | 31.00 | 15.85 | 59.53 |
+| 浏览各页后退出 TUI | 17.12 | 13.44 | 60.57 |
+| TUI 重开 20 次后退出 | 17.15 | 13.46 | 62.77 |
+| 纯 CLI 后台运行 | 16.48 | 12.79 | 56.44 |
 
-客户端列统计后台和当前 GUI/TUI，合计列纳入内核。关窗或退出 TUI 后界面进程结束，后台与内核继续运行。
+客户端列统计后台和当前 GUI/TUI，合计列纳入内核。关窗或退出 TUI 后界面进程结束，后台与内核继续运行，合计 PSS 仍高于纯 CLI 基线。
 
 其他页面与快捷规则场景：
 
 | 场景 | 客户端 RSS | 客户端 PSS | 客户端与内核合计 PSS |
 | --- | ---: | ---: | ---: |
-| 代理组折叠 | 54.73 | 45.00 | 94.04 |
-| 节点搜索 | 65.77 | 56.04 | 108.07 |
-| 搜索后返回首页 | 58.01 | 48.28 | 100.70 |
-| 五项快捷规则全开：首页 | 55.18 | 45.33 | 109.68 |
+| 代理组折叠 | 55.20 | 45.57 | 97.47 |
+| 节点搜索 | 61.02 | 51.39 | 104.74 |
+| 搜索后返回首页 | 56.92 | 47.29 | 100.65 |
+| 五项快捷规则全开时的首页 | 54.44 | 44.66 | 109.90 |
 
-RSS 完整计入共享页，PSS 按比例分摊。实际占用随设备、配置和流量变化。[原始基准数据](https://github.com/Fu021/Clash-of-Rust/actions/runs/44103803255)。
+RSS 完整计入共享页，PSS 按比例分摊。这些是 Linux 短时测量，实际占用随设备、配置和流量变化。[0.7.3 原始基准数据](https://github.com/Fu021/Clash-of-Rust/actions/runs/45788967631)。
 
 ## 编译与打包
 

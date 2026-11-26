@@ -275,6 +275,7 @@ if (downloads) {
     { os: "linux", suffix: "linux-arm64.deb", label: "arm64 DEB", hint: say("ARM servers and boards", "ARM 服务器和开发板") },
     { os: "linux", suffix: "linux-x86_64.rpm", label: "x86_64 RPM", hint: say("RPM-based Linux", "使用 RPM 的 Linux"), optional: true },
     { os: "linux", suffix: "linux-aarch64.rpm", label: "ARM64 RPM", hint: say("RPM-based Linux", "使用 RPM 的 Linux"), optional: true },
+    { os: "linux", suffix: "linux-x86_64.pkg.tar.zst", label: "x86_64 Arch", hint: "Arch Linux", optional: true },
     { os: "macos", suffix: "macos-arm64.dmg", label: "Apple Silicon DMG", hint: say("M-series Macs", "M 系列芯片") },
     { os: "macos", suffix: "macos-x64.dmg", label: "Intel DMG", hint: say("Intel Macs", "Intel 芯片") },
     { os: "android", suffix: "android-arm64.apk", label: "ARM64 APK", hint: say("Most phones and tablets", "多数手机和平板") },

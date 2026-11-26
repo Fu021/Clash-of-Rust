@@ -13,13 +13,13 @@
   <div>
     <section id="gui">
       <h2>窗口 GUI</h2>
-      <p>Windows、Debian / Ubuntu、macOS 和 Android 均可使用。</p>
+      <p>Windows、Linux、macOS 和 Android 均可使用。</p>
       <ol class="steps">
         <li><a href="download.html">下载并安装</a>对应设备的安装包，打开 Clash of Rust。</li>
-        <li>进入“订阅”，添加订阅链接或导入 YAML，再点“使用”。软件不提供代理节点。</li>
+        <li>进入“订阅”点“导入”，填写名称和订阅地址，或用本地文件入口选择 YAML。导入后点“使用”切换订阅。软件不提供代理节点。</li>
         <li>进入“代理”，测速后在手动策略组中选择节点；AUTO 等自动组由内核选优。</li>
         <li>回到首页，选“规则”模式并连接。桌面可选系统代理或 TUN；Android 使用 VPN。首次接管时按系统提示授权。</li>
-        <li>确认首页显示内核运行，到“连接”查看实际流量；网站打不开时再用“网络诊断”。</li>
+        <li>确认首页显示内核运行，到“连接”查看实际流量；网站打不开时再用“网络诊断”。Android 手机通常从“工具”进入这两页。</li>
       </ol>
       {{shot:home}}
       <p>手机和平板的入口在底栏或侧栏。Android 若已有其他 VPN，需先处理系统的 VPN 冲突；桌面关闭窗口后由托盘继续管理，选择“退出”才结束客户端。</p>
@@ -28,12 +28,12 @@
     <section id="tui">
       <h2>终端 TUI</h2>
       <p>桌面安装包附带 <code>cor</code>，在交互终端中运行。<a href="cli.html#install">找不到 cor？</a></p>
-      <pre class="term" aria-label="打开终端界面">cor ui</pre>
+      <pre class="term" aria-label="打开终端界面">cor</pre>
       <ol class="steps">
-        <li>按 <kbd>6</kbd> 进入“操作”，搜索 <code>profile add</code>，填写名称和订阅链接或本地文件路径，检查并确认执行。</li>
-        <li>用 <code>profile use</code> 选择刚添加的订阅，再执行 <code>start</code>。系统授权会回到普通终端处理，完成后按 Enter 返回。</li>
+        <li>按 <kbd>8</kbd> 进入“操作”，搜索 <code>profile add</code>，填写名称和订阅链接或本地文件路径，检查并确认执行。</li>
+        <li>按 <kbd>3</kbd> 进入“订阅”，选中刚添加的订阅，回车打开表单，保存并确认。回首页选择“启动后台与内核”。</li>
         <li>按 <kbd>2</kbd> 进入节点页，选中手动策略组后按 Enter，选择成员并确认。</li>
-        <li>在“操作”里执行 <code>proxy</code>，选择 <code>system</code> 或 <code>tun</code>。没有桌面环境的服务器建议选 TUN。</li>
+        <li>在首页选择“代理方式”，选系统代理或 TUN 并确认。无桌面环境的服务器选 TUN。需要系统授权时会切回普通终端，完成后按 Enter 返回。</li>
         <li>按 <kbd>1</kbd> 核对状态；<kbd>q</kbd> 只退出终端界面，后台与代理继续运行。</li>
       </ol>
       {{terminal:home}}
@@ -58,7 +58,7 @@ cor status</pre>
         <div class="card"><h3>某个网站打不开</h3><p>先做<a href="tools.html#check">网站检查</a>，再查<a href="tools.html#explain">规则与出口</a>。</p></div>
         <div class="card"><h3>更新或安装失败</h3><p>保留原配置，按错误原因重试；需要时<a href="download.html">手动下载安装包</a>。</p></div>
       </div>
-      <p>GUI、TUI、CLI 共用当前账户的后台和配置。只需选择一种入门方式，之后可以随时切换。</p>
+      <p>桌面 GUI、TUI、CLI 共用当前账户和数据目录的后台与配置，可随时切换。</p>
     </section>
   </div>
 </div>
