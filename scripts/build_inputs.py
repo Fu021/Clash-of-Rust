@@ -161,16 +161,16 @@ def latest_geo_release(proxy=''):
 
 
 def resolve_latest_geo(directory):
-    for attempt in range(3):
+    for delay in (1, 2, 4, 8, None):
         try:
             release = latest_geo_release()
             resources = freeze_geo(directory, {'geo': release})
             return release, resources
         except urllib.error.HTTPError as error:
-            if error.code != 404 or attempt == 2:
+            if error.code != 404 or delay is None:
                 raise
-            print('Geo release changed during download; resolving latest again.', flush=True)
-            time.sleep(attempt + 1)
+            print(f'Geo release or asset returned HTTP 404; retrying in {delay}s.', flush=True)
+            time.sleep(delay)
 
 
 def freeze_geo(directory, upstream):

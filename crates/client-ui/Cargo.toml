@@ -20,4 +20,4 @@ slint = { workspace = true }
 slint-build = { workspace = true }
 
 [dev-dependencies]
-i-slint-core = { version = "=1.19.0", default-features = false, features = ["std"] }
+i-slint-core = { version = "=1.19.1", default-features = false, features = ["std"] }

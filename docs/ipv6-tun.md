@@ -24,7 +24,7 @@ Linux 只读 `/proc/net/if_inet6` 和接口状态，区分 `available`、`unavai
 
 GUI/CLI 的唯一后台所有者每 5 秒只读采样，除默认路由外还比较非 TUN IPv6 地址和状态；相同网关下的地址出现、消失或更换也会重新评估。连续两次稳定才处理，旧内核进程的采样丢弃，失败退避重试。地址读取失败保留前次地址观察，不把它伪装成 IPv6 消失，默认路由变化仍可单独处理。
 
-普通模式重新加载当前运行配置、刷新出站与 DNS，再核对实际 TUN 覆盖，保留订阅、节点、代理方式和用户的 IPv6 偏好。mihomo 在解析配置时按系统地址决定是否创建 IPv6 TUN；配置相同则复用监听器，地址族配置发生变化时可能重建 TUN，不能承诺零连接中断，见上游 [parseIPV6](https://github.com/MetaCubeX/mihomo/blob/v1.19.33/config/config.go)、[verifyIP6](https://github.com/MetaCubeX/mihomo/blob/v1.19.33/config/utils.go) 与 [ReCreateTun](https://github.com/MetaCubeX/mihomo/blob/v1.19.33/listener/listener.go)。
+普通模式重新加载当前运行配置、刷新出站与 DNS，再核对实际 TUN 覆盖，保留订阅、节点、代理方式和用户的 IPv6 偏好。mihomo 在解析配置时按系统地址决定是否创建 IPv6 TUN；配置相同则复用监听器，地址族配置发生变化时可能重建 TUN，不能承诺零连接中断，见上游 [parseIPV6](https://github.com/MetaCubeX/mihomo/blob/v1.19.34/config/config.go)、[verifyIP6](https://github.com/MetaCubeX/mihomo/blob/v1.19.34/config/utils.go) 与 [ReCreateTun](https://github.com/MetaCubeX/mihomo/blob/v1.19.34/listener/listener.go)。
 
 Claude 保护期间不自动改写锁定的运行配置；网络变化后重新检查覆盖。IPv6 从无到有且确认没有接管时保留错误与诊断，不静默显示完整接管。IPv6 消失后，新的地址观察应清除对应的日常绕行提示；历史错误仍保留供排查。没有可用上联时，内核保留已有 IPv6 TUN 地址也不构成错误。
 

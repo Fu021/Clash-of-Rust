@@ -28,6 +28,7 @@ import android.view.Menu;
 import android.view.MenuItem;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewConfiguration;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 import android.view.WindowMetrics;
@@ -708,6 +709,14 @@ public class SlintAndroidJavaHelper {
 
     public float font_scale() {
         return mActivity.getResources().getConfiguration().fontScale;
+    }
+
+    public float horizontal_scroll_factor() {
+        return ViewConfiguration.get(mActivity).getScaledHorizontalScrollFactor();
+    }
+
+    public float vertical_scroll_factor() {
+        return ViewConfiguration.get(mActivity).getScaledVerticalScrollFactor();
     }
 
     public float display_density() {

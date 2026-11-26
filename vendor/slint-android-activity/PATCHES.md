@@ -1,8 +1,12 @@
 # Slint Android backend patch
 
-This is the published `i-slint-backend-android-activity` 1.19.0 crate,
-SHA-256 `1c1abcf6132800250b5c70198f5949a4fc42bf5e13f7e54cb6d34aa0d281522f`.
+This is the published `i-slint-backend-android-activity` 1.19.1 crate,
+SHA-256 `ee75286caf6135e251f83e1494631a625e2f80b1b435037f3d344138134fd0f6`.
 Its original license files are included. The root Cargo.lock is authoritative.
+
+The [1.19.1 release](https://github.com/slint-ui/slint/releases/tag/v1.19.1)
+handles Android mouse wheel events in both axes. The local surface, density,
+Back and keyboard handling below still applies.
 
 The release already includes upstream Slint commit
 `611357480eb7a7eb4f1957d912512fadf99a6666`: suspend the renderer while
@@ -57,7 +61,7 @@ The Java helper also carries local IME compatibility changes:
 - On API 26–29, exclude stable system bars when choosing the keyboard edge.
   Navigation bars alone must report no keyboard, including landscape side bars;
   a real keyboard retains its full occlusion for the shared layout to subtract
-the bottom safe area once. In 1.19.0 this remains a local change in
+the bottom safe area once. In 1.19.1 this remains a local change in
 `dispatchLayoutInsets`; upstream still compares the raw system-bar occlusion.
 
 The 1.19.0 rebase retains the published Java package, JNI class name, input
@@ -76,7 +80,8 @@ rotation and lifecycle regressions on API 31 and 36. The earlier Gboard
 null-pointer crash did not recur, so the native cold-start controls did not run
 and its cause remains unconfirmed. Physical-device and OEM verification remain
 pending; historical multi-version results do not validate the 1.19.0 rebase
-or prove all-device compatibility.
+or prove all-device compatibility. The 1.19.1 upgrade needs its own device
+verification for those interaction paths.
 The upstream crate license files remain authoritative.
 
 Remove this override after updating Slint to a release containing equivalent

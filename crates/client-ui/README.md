@@ -44,7 +44,7 @@ Slint 静态文案用 `@tr`，在[翻译资源](../../docs/development.md#翻译
 
 网络页使用共享 `NetworkToolMenu`、`NetworkToolHeading` 和 `NetworkToolOptions`，手机单页、桌面/Pad 双栏；各工具使用独立离线预览数据。生命周期、参数和平台限制集中在[网络工具箱](../../docs/network-tools.md)；`--network-tool 0..11` 选择工具，手机用 `--network-detail` 打开详情。节点类型与策略信息归代理页详情，不增加后台轮询。
 
-语法检查、截图和交互预览统一使用与应用依赖一致的官方 **Slint Viewer 1.19.0**（`slint-viewer`），安装到用户持久目录并校验官方下载摘要。可通过 `--viewer PATH` 和 `--check-viewer PATH` 分别指定，不把个人路径写入仓库配置。桌面、Android、内嵌 Slint 测试和预览脚本均明确使用 **edition 1.19**；升级时复查父级约束、状态切换和重复绑定的语义，统一构建与预览，不能用忽略弃用告警代替迁移。edition 的含义和迁移差异见[官方说明](https://docs.slint.dev/latest/docs/slint/guide/language/concepts/editions/)。
+语法检查、截图和交互预览统一使用与应用依赖一致的官方 **Slint Viewer 1.19.1**（`slint-viewer`），安装到用户持久目录并校验官方下载摘要。可通过 `--viewer PATH` 和 `--check-viewer PATH` 分别指定，不把个人路径写入仓库配置。桌面、Android、内嵌 Slint 测试和预览脚本均明确使用 **edition 1.19**；升级时复查父级约束、状态切换和重复绑定的语义，统一构建与预览，不能用忽略弃用告警代替迁移。edition 的含义和迁移差异见[官方说明](https://docs.slint.dev/latest/docs/slint/guide/language/concepts/editions/)。
 
 ```sh
 python3 scripts/preview-slint.py --check

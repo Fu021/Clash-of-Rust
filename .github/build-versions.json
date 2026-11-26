@@ -14,13 +14,13 @@
   },
   "tools": {
     "rust": "1.100.0",
-    "go": "1.27.3",
+    "go": "1.27.4",
     "java": "25.0.5+8",
     "python": "3.15.2",
     "python_windows": "3.15.2",
     "python_macos": "3.15.2",
     "python_windows_arm64": "3.15.2",
-    "gradle": "9.9.0"
+    "gradle": "9.9.2"
   },
   "upstream": {
     "android": {
@@ -58,15 +58,15 @@
       }
     },
     "mihomo": {
-      "tag_name": "v1.19.33",
-      "published_at": "2026-10-21T16:56:13Z",
+      "tag_name": "v1.19.34",
+      "published_at": "2026-11-11T07:01:35Z",
       "assets": [
-        {"name": "mihomo-darwin-amd64-compatible-v1.19.33.gz", "size": 22333953, "digest": "sha256:eefe967b74312f70b64efa0dfa54929d00c7af8e94416e1b12df09863a40f35b", "browser_download_url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.33/mihomo-darwin-amd64-compatible-v1.19.33.gz"},
-        {"name": "mihomo-darwin-arm64-v1.19.33.gz", "size": 20784157, "digest": "sha256:060b64b0f2c9a310831db0fe4adb2878de67bfa606c311813c1f13966aa504b6", "browser_download_url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.33/mihomo-darwin-arm64-v1.19.33.gz"},
-        {"name": "mihomo-linux-amd64-compatible-v1.19.33.gz", "size": 22893972, "digest": "sha256:386508bfb1c72c43b6a0eda73708ecdce82546581b0ebcb16366c53757c622b6", "browser_download_url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.33/mihomo-linux-amd64-compatible-v1.19.33.gz"},
-        {"name": "mihomo-linux-arm64-v1.19.33.gz", "size": 20824326, "digest": "sha256:ba408b317080ee265c46cb923a50018c1b82cbd708551cdd46a1e3e307396187", "browser_download_url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.33/mihomo-linux-arm64-v1.19.33.gz"},
-        {"name": "mihomo-windows-amd64-compatible-v1.19.33.zip", "size": 22543546, "digest": "sha256:7aaf636a4f2172dcd8ec34ac4f52797b059195e5afd6409508c963e545f8864d", "browser_download_url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.33/mihomo-windows-amd64-compatible-v1.19.33.zip"},
-        {"name": "mihomo-windows-arm64-v1.19.33.zip", "size": 20212418, "digest": "sha256:a2a26869a14634c49f3fbcecc593b498ed8591fbdd7616b24475b3d60b148da3", "browser_download_url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.33/mihomo-windows-arm64-v1.19.33.zip"}
+        {"name": "mihomo-darwin-amd64-compatible-v1.19.34.gz", "size": 22213898, "digest": "sha256:703bceaa494732fa456f47e6ac2f06bf0bc5593d4c927d5f61e10f1a31039c37", "browser_download_url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.34/mihomo-darwin-amd64-compatible-v1.19.34.gz"},
+        {"name": "mihomo-darwin-arm64-v1.19.34.gz", "size": 20649699, "digest": "sha256:1a7a20eca63fbbaec90137717465bfde488d0db2a3a79b8fadebf9b2545b6e4c", "browser_download_url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.34/mihomo-darwin-arm64-v1.19.34.gz"},
+        {"name": "mihomo-linux-amd64-compatible-v1.19.34.gz", "size": 22766457, "digest": "sha256:2763f5b414527f7baf6dc57e3f82f3ab561eedf34bfd7c2f2cde1f7e592efe06", "browser_download_url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.34/mihomo-linux-amd64-compatible-v1.19.34.gz"},
+        {"name": "mihomo-linux-arm64-v1.19.34.gz", "size": 20684679, "digest": "sha256:daaf78a6240a282cdfd75bcbf98fe321f6bd52765cc29e79f344191198f0b50f", "browser_download_url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.34/mihomo-linux-arm64-v1.19.34.gz"},
+        {"name": "mihomo-windows-amd64-compatible-v1.19.34.zip", "size": 22417383, "digest": "sha256:cd6738d4648cc1a5f48049a1343b697ab510889d648f045c5c780fc1ab443a79", "browser_download_url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.34/mihomo-windows-amd64-compatible-v1.19.34.zip"},
+        {"name": "mihomo-windows-arm64-v1.19.34.zip", "size": 20065674, "digest": "sha256:076cb04a21377675bcf009b8d1dd83006ce2464aa537e37bce1faf6d3504f554", "browser_download_url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.34/mihomo-windows-arm64-v1.19.34.zip"}
       ]
     },
     "nsis": {
@@ -76,10 +76,10 @@
       "verification_source": "https://github.com/microsoft/winget-pkgs/blob/master/manifests/n/NSIS/NSIS/3.13/NSIS.NSIS.installer.yaml"
     },
     "gradle": {
-      "version": "9.9.0",
-      "url": "https://services.gradle.org/distributions/gradle-9.9.0-bin.zip",
-      "sha256": "0b00b0ffe07c4d4789c12d4935a44a7057d55774b7540bd4a3f76f336deb177a",
-      "checksum_url": "https://services.gradle.org/distributions/gradle-9.9.0-bin.zip.sha256"
+      "version": "9.9.2",
+      "url": "https://services.gradle.org/distributions/gradle-9.9.2-bin.zip",
+      "sha256": "971fcd7150ca4ba04852c0b2ca0d2d0ab9468e14b03473eab19528809914c76b",
+      "checksum_url": "https://services.gradle.org/distributions/gradle-9.9.2-bin.zip.sha256"
     },
     "linux": {
       "version": "20.04",

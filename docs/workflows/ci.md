@@ -14,7 +14,7 @@ Windows 平台路径变化沿用更新专项，并在两种原生架构上运行
 
 共享检测与网络工具源码变化也会选择 Linux x64 共享业务和界面专项，包含工具参数、出口、TLS、UDP、进程取消及迟到结果回归，并实际运行 CLI 参数与 TUI 测试，不能只因本轮没有修改 CLI 文件就遗漏新增工具的命令入口。该平台一旦选择源码专项，Clippy 同时检查测试目标；不能只检查发行入口、漏掉尚未编译的测试代码。修补提交仍须按实际触及路径选择回归，完整可选集合另用 `extended_tests=true` 验证。
 
-先生成一次 `dependency-snapshot`，复制仓库的 Rust/Go 锁文件与 Android 声明，结合 `.github/build-versions.json` 中已确认的工具与内核身份；不执行 `cargo update`、`go get` 或 Maven 自动升级，也不应用旧缓存中曾自动解析出的新版源码依赖。四份 Geo 原包每轮从官方 `latest` 解析附件身份、大小和 SHA256，下载并校验后随该轮快照分发；解析后附件被上游替换而返回 404 时重新解析并有限重试。各平台应用时再次校验，Publish Release 复用同一轮快照；缺失、损坏或摘要不符仍失败。不同 CI 轮次可使用不同 Geo 数据，同一次构建及发布不混用。
+先生成一次 `dependency-snapshot`，复制仓库的 Rust/Go 锁文件与 Android 声明，结合 `.github/build-versions.json` 中已确认的工具与内核身份；不执行 `cargo update`、`go get` 或 Maven 自动升级，也不应用旧缓存中曾自动解析出的新版源码依赖。四份 Geo 原包每轮从官方 `latest` 解析附件身份、大小和 SHA256，下载并校验后随该轮快照分发。上游替换期间 Release 或附件返回 404 时，最多等待 1、2、4、8 秒逐次重试，每次重新解析 `latest`。各平台应用时再次校验，Publish Release 复用同一轮快照；缺失、损坏或摘要不符仍失败。不同 CI 轮次可使用不同 Geo 数据，同一次构建及发布不混用。
 
 依赖维护可手动运行现有 CI，设置 `refresh_dependencies=true`：只在 Actions 解析 Cargo/Go 更新并导出带来源提交和 SHA256 的 `dependency-updates`，不运行平台矩阵，也不作为打包依据。将已审阅的锁文件提交后，须取得新提交的普通 push CI，并按[实际改动范围](../development.md#按改动选择验证)选择兼容、内存或发行核验；受限本机不执行依赖下载或构建。
 

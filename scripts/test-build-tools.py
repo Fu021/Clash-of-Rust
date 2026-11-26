@@ -5824,7 +5824,7 @@ Private_Clean: 2 kB
                     self.assertRaises(ValueError):
                 build_inputs.latest_geo_release()
 
-    def test_geo_refetches_metadata_only_when_asset_disappears(self):
+    def test_geo_refetches_metadata_when_release_or_asset_is_missing(self):
         first = {'tag_name': 'latest', 'published_at': 'first', 'assets': []}
         second = {'tag_name': 'latest', 'published_at': 'second', 'assets': []}
         missing = urllib.error.HTTPError('https://api.github.com/', 404, 'gone', {}, None)
@@ -5837,6 +5837,19 @@ Private_Clean: 2 kB
         self.assertEqual(resources, {'resources/GeoIP.dat': 'ok'})
         self.assertEqual(metadata.call_count, 2)
         self.assertEqual(freeze.call_args_list[-1].args[1], {'geo': second})
+        with patch.object(build_inputs, 'latest_geo_release', side_effect=[missing] * 3 + [second]) as metadata, \
+                patch.object(build_inputs, 'freeze_geo', return_value={}) as freeze, \
+                patch.object(build_inputs.time, 'sleep') as sleep:
+            self.assertEqual(build_inputs.resolve_latest_geo(Path('/unused')), (second, {}))
+        self.assertEqual(metadata.call_count, 4)
+        freeze.assert_called_once_with(Path('/unused'), {'geo': second})
+        self.assertEqual([invocation.args[0] for invocation in sleep.call_args_list], [1, 2, 4])
+        with patch.object(build_inputs, 'latest_geo_release', side_effect=missing) as metadata, \
+                patch.object(build_inputs.time, 'sleep') as sleep, \
+                self.assertRaises(urllib.error.HTTPError):
+            build_inputs.resolve_latest_geo(Path('/unused'))
+        self.assertEqual(metadata.call_count, 5)
+        self.assertEqual([invocation.args[0] for invocation in sleep.call_args_list], [1, 2, 4, 8])
         with patch.object(build_inputs, 'latest_geo_release', return_value=first) as metadata, \
                 patch.object(build_inputs, 'freeze_geo', side_effect=forbidden), \
                 patch.object(build_inputs.time, 'sleep') as sleep, \

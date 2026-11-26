@@ -92,7 +92,7 @@ Linux 的桌面导出及 `cor diagnose`／`--offline` 另保存：
 
 非节点类错误使本轮测速明确失败，不再用 `unwrap_or(0)` 吞掉错误；不发布不完整结果，不触发“全部节点不可达”恢复确认，旧测量值也不冒充本次结果。只有收到有效节点失败结果后，才沿用双目标确认与保留接管的策略。成功响应仍保持 CLI 原有的节点到延迟数值映射。
 
-状态分类依据固定依赖 mihomo `v1.19.33` 的 [`getProxyDelay`](https://github.com/MetaCubeX/mihomo/blob/v1.19.33/hub/route/proxies.go) 和 [provider 路由](https://github.com/MetaCubeX/mihomo/blob/v1.19.33/hub/route/provider.go)；后续升级须同时核对这些语义。
+状态分类依据固定依赖 mihomo `v1.19.34` 的 [`getProxyDelay`](https://github.com/MetaCubeX/mihomo/blob/v1.19.34/hub/route/proxies.go) 和 [provider 路由](https://github.com/MetaCubeX/mihomo/blob/v1.19.34/hub/route/provider.go)；后续升级须同时核对这些语义。
 
 ## Android 现场
 
@@ -159,4 +159,4 @@ Android 文档选择、导出和导入失败另外在应用日志中记录 `DOCU
 
 核对错误与采集时间、内核及 VPN 状态。稍后导出的报告不一定保留故障发生时的网络条件；DIRECT 拨号拒绝、IPv4/IPv6 超时不能代替逐节点测速状态和套接字保护结果，`pending` 也不能当作检测失败。
 
-测速路径保留真实错误分类。上游 [`dialer.go`](https://github.com/MetaCubeX/mihomo/blob/v1.19.33/component/dialer/dialer.go) 在安装 `DefaultSocketHook` 后，TCP/UDP 拨号已跳过 `interface-name` 与 `routing-mark`；本应用初始化时就安装该 hook，不能仅凭订阅含桌面网卡字段认定它导致 Android 故障。没有充分证据时不改写订阅或 provider override，也不改变节点协议、DNS、证书验证及出站链。先取得同一次复现的报告，核对阶段、HTTP 分类、VPN 和保护计数，再决定是否需要具体节点协议或 DNS 专项。
+测速路径保留真实错误分类。上游 [`dialer.go`](https://github.com/MetaCubeX/mihomo/blob/v1.19.34/component/dialer/dialer.go) 在安装 `DefaultSocketHook` 后，TCP/UDP 拨号已跳过 `interface-name` 与 `routing-mark`；本应用初始化时就安装该 hook，不能仅凭订阅含桌面网卡字段认定它导致 Android 故障。没有充分证据时不改写订阅或 provider override，也不改变节点协议、DNS、证书验证及出站链。先取得同一次复现的报告，核对阶段、HTTP 分类、VPN 和保护计数，再决定是否需要具体节点协议或 DNS 专项。
