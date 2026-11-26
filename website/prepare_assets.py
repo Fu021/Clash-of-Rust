@@ -11,6 +11,7 @@ from html.parser import HTMLParser
 import argparse
 import json
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tomllib
@@ -52,51 +53,77 @@ def illustrations(names=None):
 
 
 def screenshots(options):
-    if not options.gui_previews or not options.android_preview or not options.terminal_previews or not options.terminal_commit:
-        raise ValueError("shots requires current GUI, Android and actual PTY preview paths and the terminal source commit")
-    version = tomllib.loads((REPO / "Cargo.toml").read_text())["workspace"]["package"]["version"]
-    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO, text=True).strip()
-    sources = {
-        "home": options.gui_previews / "home-light.png",
-        "nodes": options.gui_previews / "proxies-light.png",
-        "subscriptions": options.gui_previews / "subscriptions-light.png",
-        "rules": options.gui_previews / "rules-light.png",
-        "network": options.gui_previews / "network-light.png",
-        "protection": options.gui_previews / "ai-check-light.png",
-        "applications": options.android_preview / "android/settings-light.png",
-    }
+    if not options.gui_previews or not options.android_preview:
+        raise ValueError("shots requires Chinese and English desktop and Android preview directories")
+    version = source_version(options.gui_commit)
+    terminal = terminal_records(options.terminal_previews, options.terminal_commit)
+    if any(frame["version"] != version for group in terminal.values() for frame in group.values()):
+        raise ValueError("GUI and terminal previews must use the same release")
+    desktop_pages = {"home": "home", "nodes": "proxies", "subscriptions": "subscriptions",
+                     "rules": "rules", "network": "network", "protection": "ai-check"}
+    copies = []
     records = {}
-    for name, source in sources.items():
-        image = Image.open(source)
-        if image.format != "PNG":
-            raise ValueError(f"Not a production PNG preview: {source}")
-        target = OUT / f"app-{name}.png"
+    for lang, desktop, android in zip(("zh", "en"), options.gui_previews, options.android_preview, strict=True):
+        records[lang] = {}
+        sources = {name: desktop / page for name, page in desktop_pages.items()}
+        sources["applications"] = android / "android/settings"
+        for name, stem in sources.items():
+            files = {}
+            sizes = set()
+            for theme in ("light", "dark"):
+                source = stem.with_name(f"{stem.name}-{theme}.png")
+                with Image.open(source) as image:
+                    if image.format != "PNG":
+                        raise ValueError(f"Not a PNG preview: {source}")
+                    sizes.add(image.size)
+                    image.verify()
+                lang_suffix = "-en" if lang == "en" else ""
+                theme_suffix = "-dark" if theme == "dark" else ""
+                target = OUT / f"app-{name}{lang_suffix}{theme_suffix}.png"
+                files[theme] = target.name
+                copies.append((source, target))
+            if len(sizes) != 1:
+                raise ValueError(f"Light and dark preview sizes differ: {stem}")
+            (width, height), = sizes
+            records[lang][name] = {"files": files, "width": width, "height": height,
+                                   "platform": "android" if name == "applications" else "desktop",
+                                   "version": version, "commit": options.gui_commit,
+                                   "source": "production-slint-preview"}
+    for source, target in copies:
         shutil.copyfile(source, target)
-        records[name] = {"file": target.name, "width": image.width, "height": image.height,
-                         "platform": "android" if name == "applications" else "desktop",
-                         "version": version, "commit": commit, "theme": "light",
-                         "source": "production-slint-preview"}
-    terminal_screenshots(options.terminal_previews, options.terminal_commit)
-    for obsolete in ("app-home-light.webp", "app-home-dark.webp", "app-network.webp"):
-        (OUT / obsolete).unlink(missing_ok=True)
     shutil.copyfile(REPO / "resources/icons/app.png", OUT / "cat.png")
-    (SRC / "content/screenshots.json").write_text(json.dumps(records, ensure_ascii=False, indent=2) + "\n")
-    print(f"  {len(records)} current GUI previews")
+    write_captures("screenshots", records)
+    write_captures("terminal", terminal)
+    print(f"  {len(copies)} bilingual light and dark GUI previews")
 
 
-def terminal_screenshots(previews, commit):
-    import re
-    if not previews or not commit or not re.fullmatch(r"[0-9a-f]{40}", commit):
-        raise ValueError("terminal requires actual PTY previews and their full source commit")
-    version = tomllib.loads((REPO / "Cargo.toml").read_text())["workspace"]["package"]["version"]
+def source_version(commit):
+    if not commit or not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise ValueError("Capture source must be a full Git commit")
+    manifest = subprocess.check_output(["git", "show", f"{commit}:Cargo.toml"], cwd=REPO, text=True)
+    return tomllib.loads(manifest)["workspace"]["package"]["version"]
+
+
+def terminal_records(previews, commit):
+    if not previews:
+        raise ValueError("terminal requires Chinese and English actual PTY preview directories")
+    version = source_version(commit)
     terminal = {}
-    for name in ("home", "network"):
-        record = json.loads((previews / f"background-tui-{name}.json").read_text())
-        if record.get("source") != "actual-cor-pty" or not any(version in line["text"] for line in record["lines"]):
-            raise ValueError(f"The {name} PTY capture is not from {version}")
-        terminal[name] = {**record, "version": version, "commit": commit}
-    (SRC / "content/terminal.json").write_text(json.dumps(terminal, ensure_ascii=False, indent=2) + "\n")
-    print(f"  {len(terminal)} actual PTY frames")
+    for lang, directory in zip(("zh", "en"), previews, strict=True):
+        terminal[lang] = {}
+        for name in ("home", "network"):
+            record = json.loads((directory / f"background-tui-{name}.json").read_text(encoding="utf-8"))
+            text = "\n".join(line["text"] for line in record["lines"])
+            navigation = "8 操作" if lang == "zh" else "8 Commands"
+            if record.get("source") != "actual-cor-pty" or f"v{version}" not in text or navigation not in text:
+                raise ValueError(f"Expected a {lang} {name} PTY capture from {version} in {directory}")
+            terminal[lang][name] = {**record, "version": version, "commit": commit}
+    return terminal
+
+
+def write_captures(name, records):
+    (SRC / f"content/{name}.json").write_text(json.dumps(records, ensure_ascii=False, indent=2) + "\n",
+                                             encoding="utf-8")
 
 
 def dither_tiles(block=8, columns=32, rows=12):
@@ -195,15 +222,16 @@ def fonts():
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("steps", nargs="*", choices=("art", "shots", "terminal", "dither", "fonts"))
-    parser.add_argument("--gui-previews", type=Path)
-    parser.add_argument("--android-preview", type=Path)
-    parser.add_argument("--terminal-previews", type=Path)
+    parser.add_argument("--gui-previews", type=Path, nargs=2, metavar=("ZH", "EN"))
+    parser.add_argument("--android-preview", type=Path, nargs=2, metavar=("ZH", "EN"))
+    parser.add_argument("--gui-commit")
+    parser.add_argument("--terminal-previews", type=Path, nargs=2, metavar=("ZH", "EN"))
     parser.add_argument("--terminal-commit")
     parser.add_argument("--art-name", action="append", choices=(*ART_NAMES, *NIGHT_ART_NAMES))
     options = parser.parse_args()
     OUT.mkdir(parents=True, exist_ok=True)
     steps = {"art": lambda: illustrations(options.art_name), "shots": lambda: screenshots(options),
-             "terminal": lambda: terminal_screenshots(options.terminal_previews, options.terminal_commit),
+             "terminal": lambda: write_captures("terminal", terminal_records(options.terminal_previews, options.terminal_commit)),
              "dither": dither_tiles, "fonts": fonts}
     chosen = options.steps or ["art", "dither", "fonts"]
     for step in chosen:

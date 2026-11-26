@@ -48,15 +48,15 @@ The table lists supported installs and tested environments for **stable release 
 
 ## Interface Preview
 
-Desktop component previews and an actual terminal frame from an isolated 0.7.3 test.
+Desktop component previews and a rendering of an actual terminal frame from an isolated 0.7.3 test.
 
 | Home screen, light theme | Home screen, dark theme |
 | --- | --- |
-| [![Home screen, light theme](website/src/assets/app-home.png)](website/src/assets/app-home.png) | [![Home screen, dark theme](docs/images/home-0.7.3-dark.png)](docs/images/home-0.7.3-dark.png) |
+| [![Home screen, light theme](website/src/assets/app-home-en.png)](website/src/assets/app-home-en.png) | [![Home screen, dark theme](website/src/assets/app-home-en-dark.png)](website/src/assets/app-home-en-dark.png) |
 
 | TUI home screen |
 | :---: |
-| [![TUI home screen](docs/images/tui-0.7.3.png)](docs/images/tui-0.7.3.png) |
+| [![TUI home screen](docs/images/tui-en-0.7.3.png)](docs/images/tui-en-0.7.3.png) |
 
 ## Installation and Usage
 

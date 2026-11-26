@@ -48,13 +48,13 @@ python3 -B website/export_preview.py
 - 插画使用乡间铁路、道岔和蓝猫主题；原图在 `src/art/raw/`，网页图在 `src/assets/`，新增来源见[插画说明](src/art/README.md)。每个内容页均有插画，图片外框、按钮与卡片采用统一圆角。动效使用短时透明度、位移和颜色过渡，无常驻逐帧任务。
 - 首页导览可见时每 2.6 秒切换桌面软件画面，选择画面后暂停，也可手动暂停/继续；焦点位于导览内、图片放大、切到其他标签页、导览离屏或系统减少动态效果时停用计时，悬停不暂停。切换预留共同高度，首页不混入手机竖屏图；无脚本保留第一帧。CLI 与 TUI 展示紧接导览所在区块，后接功能列表；终端内容按宽度换行，不要求横向拖拉。
 - 字标在构建时直接复制 README 的 `resources/icons/wordmark-light.svg`；深色背景使用对应 `wordmark-dark.svg`，不以近似字体替换。首页桌面和手机使用同一张完整插画与比例，不另换手机裁图；代理、直连、拦截三种出口标签均保留，手机紧凑排列在画面上方，渐隐遮罩只作用于插画，不裁切标签。其余横幅使用同源缩略图。手机导航及章节目录可折叠，图片可放大，命令和表格在局部滚动。
-- `src/content/screenshots.json` 记录 GUI 截图的真实版本、来源提交、尺寸及平台；`terminal.json` 保留实际 PTY 帧。每类画面跨页复用，图注显示其真实版本，不随下载快照改标签。当前画面来自正式版 `0.7.3`、提交 `24a1c967`。GUI 使用正式 Slint 组件和演示数据，TUI 来自[内存基准](https://github.com/Fu021/Clash-of-Rust/actions/runs/45788967631)中使用虚构订阅的隔离 PTY。两者的展示验证范围不含联网或设备验收。
+- `src/content/screenshots.json` 记录 GUI 截图的真实版本、来源提交、尺寸及平台；`terminal.json` 保留实际 PTY 帧。中英文网站及对应 README 分别使用同语言画面，GUI 的每类画面提供同尺寸浅色和深色版本，网站缩略图与放大图随主题切换；英文页面不能复用中文画面。每类画面跨页复用，图注显示其真实版本，不随下载快照改标签。当前画面来自正式版 `0.7.3`、提交 `24a1c967`。GUI 使用正式 Slint 组件和本地化演示数据；中文 TUI 来自[内存基准](https://github.com/Fu021/Clash-of-Rust/actions/runs/45788967631)中的隔离 PTY，英文 TUI 来自隔离环境运行的正式版，均使用虚构订阅。两者的展示验证范围不含联网或设备验收。
 - 字体使用 National Park、Departure Mono 和 Noto Sans SC，许可证随 `src/assets/fonts/` 保留。来源分别为 https://github.com/benhoepner/National-Park 、https://departuremono.com/ 、https://github.com/notofonts/noto-cjk 。中文正文使用系统字体，标题使用真实 Medium 子集，避免伪加粗。
 - 修改中文标题、按钮或版本内容后检查展示字体的字形覆盖；有新增字形时执行 `python3 website/prepare_assets.py fonts` 更新子集。源字体放 `.cache/fonts/`，路径见脚本；首次准备需要 Pillow、fontTools 和 brotli，普通静态构建只需 Python 标准库。已有字形充分覆盖时保留字体文件，不为文案调整重复下载工具。
 
-更新配图时用 `prepare_assets.py shots --gui-previews DIR --android-preview DIR --terminal-previews DIR --terminal-commit SHA`；GUI 目录包含同尺寸、同主题的首页、代理、订阅、规则、网络和 A÷页面，Android 目录包含应用分流截图，终端目录使用 CI 导出的 `background-tui-{home,network}.json`。保留实际版本与源提交，源码变化不等于这些截图已重新验收；有布局改动须重新生成。
+更新配图时用 `prepare_assets.py shots --gui-previews ZH_DIR EN_DIR --android-preview ZH_DIR EN_DIR --gui-commit SHA --terminal-previews ZH_DIR EN_DIR --terminal-commit SHA`；桌面目录包含首页、代理、订阅、规则、网络和 A÷页面的 `-light.png` 与 `-dark.png`，Android 目录包含 `android/settings-light.png` 与 `android/settings-dark.png`，终端目录各包含实际 PTY 的 `background-tui-{home,network}.json`。英文预览同时本地化演示数据；如 Viewer 的 gettext 未正确处理带上下文的译文，应在临时源码副本中按正式译表代入对应译文，不改正式组件。须目视核对语言、主题、画面文字和对应 README，检查同页深浅尺寸一致。来源提交指生成画面的实际客户端提交，不随网站提交变化；有布局改动须重新生成。
 
-独立更新终端帧用 `prepare_assets.py terminal --terminal-previews DIR --terminal-commit SHA`。新增插画可用 `prepare_assets.py art --art-name start --art-name manual --art-name versions`，避免重复转换已有大图。字体源未保留在本机时，新增中文使用系统字体回退；只有取得原字体源后才更新字形子集，不替换成其他字标。
+独立更新终端帧用 `prepare_assets.py terminal --terminal-previews ZH_DIR EN_DIR --terminal-commit SHA`。新增插画可用 `prepare_assets.py art --art-name start --art-name manual --art-name versions`，避免重复转换已有大图。字体源未保留在本机时，新增中文使用系统字体回退；只有取得原字体源后才更新字形子集，不替换成其他字标。
 
 `dist/`、`.cache/`、单文件预览和实时接口检查文件均不提交。构建过程不发布、不安装客户端、不修改用户网络。
 

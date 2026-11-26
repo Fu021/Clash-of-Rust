@@ -276,29 +276,39 @@ class SiteTests(unittest.TestCase):
         captures = json.loads((build.SRC/'content/screenshots.json').read_text())
         terminal = json.loads((build.SRC/'content/terminal.json').read_text())
         published = {release['version'] for release in self.data['releases']}
-        self.assertEqual(len({capture['version'] for capture in captures.values()}), 1)
-        for record in [*captures.values(), *terminal.values()]:
-            self.assertIn(record['version'], published)
-            self.assertRegex(record['commit'], r'^[0-9a-f]{40}$')
-        self.assertEqual(set(captures), set(build.CAPTURES))
-        for capture in captures.values():
-            image = (build.SRC/'assets'/capture['file']).read_bytes()
-            self.assertEqual(image[:8], b'\x89PNG\r\n\x1a\n')
-            self.assertEqual(struct.unpack('>II',image[16:24]), (capture['width'],capture['height']))
-            self.assertRegex(capture['commit'],r'^[0-9a-f]{40}$')
-            self.assertEqual(capture['source'],'production-slint-preview')
-        for frame in terminal.values():
-            self.assertEqual(frame['source'],'actual-cor-pty')
-            self.assertTrue(any(frame['version'] in line['text'] for line in frame['lines']))
-        for language in ('','en'):
-            for page in ('index','start','guide','tui','tools'):
-                source = (build.DIST/language/(page+'.html')).read_text()
-                self.assertIn('data-capture-version=',source)
+        self.assertEqual(set(captures), {'zh', 'en'})
+        self.assertEqual(set(terminal), {'zh', 'en'})
+        self.assertEqual(len({capture['version'] for group in captures.values() for capture in group.values()}), 1)
+        image_files = set()
+        for language in ('zh', 'en'):
+            self.assertEqual(set(captures[language]), set(build.CAPTURES))
+            self.assertEqual(set(terminal[language]), {'home', 'network'})
+            for record in [*captures[language].values(), *terminal[language].values()]:
+                self.assertIn(record['version'], published)
+                self.assertRegex(record['commit'], r'^[0-9a-f]{40}$')
+            for capture in captures[language].values():
+                self.assertEqual(set(capture['files']), {'light', 'dark'})
+                self.assertEqual(capture['source'], 'production-slint-preview')
+                for filename in capture['files'].values():
+                    self.assertNotIn(filename, image_files)
+                    image_files.add(filename)
+                    image = (build.SRC/'assets'/filename).read_bytes()
+                    self.assertEqual(image[:8], b'\x89PNG\r\n\x1a\n')
+                    self.assertEqual(struct.unpack('>II', image[16:24]), (capture['width'], capture['height']))
+            for frame in terminal[language].values():
+                self.assertEqual(frame['source'], 'actual-cor-pty')
+                text = '\n'.join(line['text'] for line in frame['lines'])
+                self.assertIn('v' + frame['version'], text)
+                self.assertIn('8 操作' if language == 'zh' else '8 Commands', text)
+            for page in ('index', 'start', 'guide', 'tui', 'tools'):
+                source = (build.DIST/('' if language == 'zh' else 'en')/(page+'.html')).read_text()
+                self.assertIn(f'data-capture-language="{language}"', source)
+                self.assertIn('data-capture-version=', source)
                 if page != 'guide':
-                    self.assertIn('terminal-capture',source)
+                    self.assertIn('terminal-capture', source)
                     self.assertRegex(source, r'terminal-rule">[ ─]+</span>')
-                self.assertNotIn('app-home-light.webp',source)
-                self.assertNotIn('app-network.webp',source)
+                self.assertNotIn('app-home-light.webp', source)
+                self.assertNotIn('app-network.webp', source)
     def test_preview_embeds_assets(self):
         import export_preview
         with mock.patch.multiple(export_preview, ROOT=build.ROOT, DIST=build.DIST):

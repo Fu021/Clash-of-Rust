@@ -555,6 +555,43 @@ async function checkThemes(origin) {
   report.themes_and_local_time = "passed";
 }
 
+async function checkCaptureThemes(origin) {
+  const records = JSON.parse(fs.readFileSync(path.join(__dirname, "src/content/screenshots.json"), "utf8"));
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, serviceWorkers: "block" });
+  await context.route("**/*", route => new URL(route.request().url()).origin === origin ? route.continue() : route.abort());
+  try {
+    for (const language of ["zh", "en"]) {
+      const page = await context.newPage();
+      await page.goto(origin + (language === "zh" ? "/guide" : "/en/guide"), { waitUntil: "load" });
+      await settleImages(page);
+      const captures = page.locator(`[data-capture-language="${language}"] [data-enlarge]`);
+      assert.equal(await captures.count(), 7);
+      for (const theme of ["light", "dark"]) {
+        await page.evaluate(value => window.siteTheme.setMode(value), theme);
+        for (const link of await captures.all()) {
+          const name = await link.locator("..").getAttribute("data-capture-name");
+          const record = records[language][name];
+          const expected = record.files[theme];
+          await page.waitForFunction(({element, filename}) => element.currentSrc.endsWith("/" + filename),
+            {element: await link.locator("img").elementHandle(), filename: expected});
+          assert.ok((await link.getAttribute("href")).endsWith("/" + expected));
+        }
+      }
+      const link = captures.first();
+      await link.click();
+      const enlarged = page.locator("[data-image-view] img");
+      assert.ok((await enlarged.getAttribute("src")).endsWith("/" + records[language].home.files.dark));
+      await page.evaluate(() => window.siteTheme.setMode("light"));
+      assert.ok((await enlarged.getAttribute("src")).endsWith("/" + records[language].home.files.light));
+      await page.keyboard.press("Escape");
+      await page.close();
+    }
+  } finally {
+    await context.close();
+  }
+  report.capture_languages_and_themes = "passed";
+}
+
 async function checkVisitors(origin) {
   const context = await browser.newContext({ serviceWorkers: "block" });
   const identifiers = [];
@@ -632,6 +669,7 @@ async function run() {
   await checkDownloadFallbacks(origin);
   await checkBenchmarkDetails(origin);
   await checkThemes(origin);
+  await checkCaptureThemes(origin);
   await checkVisitors(origin);
   const context = await browser.newContext({
     viewport: { width: 360, height: 640 }, javaScriptEnabled: false, colorScheme: "dark", serviceWorkers: "block",

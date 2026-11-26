@@ -1,256 +1,514 @@
 {
-  "home": {
-    "source": "actual-cor-pty",
-    "lines": [
-      {
-        "text": "  CLASH OF RUST   /   TERMINAL   本机控制台",
-        "tone": "accent"
-      },
-      {
-        "text": "",
-        "tone": "plain"
-      },
-      {
-        "text": "  [1 首页]      2 节点       3 订阅       4 连接",
-        "tone": "accent"
-      },
-      {
-        "text": "   5 规则       6 工具       7 设置       8 操作",
-        "tone": "accent"
-      },
-      {
-        "text": "  ───────────────────────────────────────────────────────────────────────────────────────────────",
-        "tone": "muted"
-      },
-      {
-        "text": "  首页 · Enter 操作，修改前确认",
-        "tone": "accent"
-      },
-      {
-        "text": "  内核运行中 · CLI 后台 · 0.7.3",
-        "tone": "accent"
-      },
-      {
-        "text": "  ↓ 下载 0.0 KiB/s · ↑ 上传 0.0 KiB/s · 连接 0",
-        "tone": "plain"
-      },
-      {
-        "text": "  参考线路：DIRECT",
-        "tone": "muted"
-      },
-      {
-        "text": "  › 停止内核",
-        "tone": "selected"
-      },
-      {
-        "text": "    语言/language · 简体中文",
-        "tone": "plain"
-      },
-      {
-        "text": "    代理方式 · 关闭",
-        "tone": "plain"
-      },
-      {
-        "text": "    运行模式 · 规则",
-        "tone": "plain"
-      },
-      {
-        "text": "    当前订阅 · Memory workload",
-        "tone": "plain"
-      },
-      {
-        "text": "    Claude 保护 · 关闭",
-        "tone": "plain"
-      },
-      {
-        "text": "    检查更新 · 未检查 · 自动检查已关闭",
-        "tone": "plain"
-      },
-      {
-        "text": "",
-        "tone": "plain"
-      },
-      {
-        "text": "",
-        "tone": "plain"
-      },
-      {
-        "text": "",
-        "tone": "plain"
-      },
-      {
-        "text": "",
-        "tone": "plain"
-      },
-      {
-        "text": "",
-        "tone": "plain"
-      },
-      {
-        "text": "",
-        "tone": "plain"
-      },
-      {
-        "text": "",
-        "tone": "plain"
-      },
-      {
-        "text": "",
-        "tone": "plain"
-      },
-      {
-        "text": "",
-        "tone": "plain"
-      },
-      {
-        "text": "",
-        "tone": "plain"
-      },
-      {
-        "text": "───────────────────────────────────────────────────────────────────────────────────────────────────",
-        "tone": "muted"
-      },
-      {
-        "text": "退出界面保留后台和代理",
-        "tone": "muted"
-      },
-      {
-        "text": "↑↓ 选择 · Enter 操作 · r 刷新 · q 退出",
-        "tone": "muted"
-      },
-      {
-        "text": "v0.7.3 · 本机后台 · 每秒采样，变化时绘制",
-        "tone": "muted"
-      }
-    ],
-    "version": "0.7.3",
-    "commit": "24a1c967eb26c3943641b5fad463a33cb159011c"
+  "zh": {
+    "home": {
+      "source": "actual-cor-pty",
+      "lines": [
+        {
+          "text": "  CLASH OF RUST   /   TERMINAL   本机控制台",
+          "tone": "accent"
+        },
+        {
+          "text": "",
+          "tone": "plain"
+        },
+        {
+          "text": "  [1 首页]      2 节点       3 订阅       4 连接",
+          "tone": "accent"
+        },
+        {
+          "text": "   5 规则       6 工具       7 设置       8 操作",
+          "tone": "accent"
+        },
+        {
+          "text": "  ───────────────────────────────────────────────────────────────────────────────────────────────",
+          "tone": "muted"
+        },
+        {
+          "text": "  首页 · Enter 操作，修改前确认",
+          "tone": "accent"
+        },
+        {
+          "text": "  内核运行中 · CLI 后台 · 0.7.3",
+          "tone": "accent"
+        },
+        {
+          "text": "  ↓ 下载 0.0 KiB/s · ↑ 上传 0.0 KiB/s · 连接 0",
+          "tone": "plain"
+        },
+        {
+          "text": "  参考线路：DIRECT",
+          "tone": "muted"
+        },
+        {
+          "text": "  › 停止内核",
+          "tone": "selected"
+        },
+        {
+          "text": "    语言/language · 简体中文",
+          "tone": "plain"
+        },
+        {
+          "text": "    代理方式 · 关闭",
+          "tone": "plain"
+        },
+        {
+          "text": "    运行模式 · 规则",
+          "tone": "plain"
+        },
+        {
+          "text": "    当前订阅 · Memory workload",
+          "tone": "plain"
+        },
+        {
+          "text": "    Claude 保护 · 关闭",
+          "tone": "plain"
+        },
+        {
+          "text": "    检查更新 · 未检查 · 自动检查已关闭",
+          "tone": "plain"
+        },
+        {
+          "text": "",
+          "tone": "plain"
+        },
+        {
+          "text": "",
+          "tone": "plain"
+        },
+        {
+          "text": "",
+          "tone": "plain"
+        },
+        {
+          "text": "",
+          "tone": "plain"
+        },
+        {
+          "text": "",
+          "tone": "plain"
+        },
+        {
+          "text": "",
+          "tone": "plain"
+        },
+        {
+          "text": "",
+          "tone": "plain"
+        },
+        {
+          "text": "",
+          "tone": "plain"
+        },
+        {
+          "text": "",
+          "tone": "plain"
+        },
+        {
+          "text": "",
+          "tone": "plain"
+        },
+        {
+          "text": "───────────────────────────────────────────────────────────────────────────────────────────────────",
+          "tone": "muted"
+        },
+        {
+          "text": "退出界面保留后台和代理",
+          "tone": "muted"
+        },
+        {
+          "text": "↑↓ 选择 · Enter 操作 · r 刷新 · q 退出",
+          "tone": "muted"
+        },
+        {
+          "text": "v0.7.3 · 本机后台 · 每秒采样，变化时绘制",
+          "tone": "muted"
+        }
+      ],
+      "version": "0.7.3",
+      "commit": "24a1c967eb26c3943641b5fad463a33cb159011c"
+    },
+    "network": {
+      "source": "actual-cor-pty",
+      "lines": [
+        {
+          "text": "  CLASH OF RUST   /   TERMINAL   本机控制台",
+          "tone": "accent"
+        },
+        {
+          "text": "",
+          "tone": "plain"
+        },
+        {
+          "text": "   1 首页       2 节点       3 订阅       4 连接",
+          "tone": "accent"
+        },
+        {
+          "text": "   5 规则      [6 工具]      7 设置       8 操作",
+          "tone": "accent"
+        },
+        {
+          "text": "  ───────────────────────────────────────────────────────────────────────────────────────────────",
+          "tone": "muted"
+        },
+        {
+          "text": "  网站检查  1/12",
+          "tone": "accent"
+        },
+        {
+          "text": "  目标：github.com",
+          "tone": "plain"
+        },
+        {
+          "text": "  参数：默认检查",
+          "tone": "muted"
+        },
+        {
+          "text": "  快速定位解析、响应和实际命中规则；详细分析使用专项工具",
+          "tone": "muted"
+        },
+        {
+          "text": "",
+          "tone": "plain"
+        },
+        {
+          "text": "",
+          "tone": "plain"
+        },
+        {
+          "text": "",
+          "tone": "plain"
+        },
+        {
+          "text": "",
+          "tone": "plain"
+        },
+        {
+          "text": "",
+          "tone": "plain"
+        },
+        {
+          "text": "",
+          "tone": "plain"
+        },
+        {
+          "text": "",
+          "tone": "plain"
+        },
+        {
+          "text": "",
+          "tone": "plain"
+        },
+        {
+          "text": "",
+          "tone": "plain"
+        },
+        {
+          "text": "",
+          "tone": "plain"
+        },
+        {
+          "text": "",
+          "tone": "plain"
+        },
+        {
+          "text": "",
+          "tone": "plain"
+        },
+        {
+          "text": "",
+          "tone": "plain"
+        },
+        {
+          "text": "",
+          "tone": "plain"
+        },
+        {
+          "text": "",
+          "tone": "plain"
+        },
+        {
+          "text": "",
+          "tone": "plain"
+        },
+        {
+          "text": "",
+          "tone": "plain"
+        },
+        {
+          "text": "───────────────────────────────────────────────────────────────────────────────────────────────────",
+          "tone": "muted"
+        },
+        {
+          "text": "退出界面保留后台和代理",
+          "tone": "muted"
+        },
+        {
+          "text": "←→ 切换工具 · o 参数 · e 导出 · / 输入 · Enter 检查 · ↑↓ 结果 · Esc 取消 · q 退出",
+          "tone": "muted"
+        },
+        {
+          "text": "v0.7.3 · 本机后台 · 每秒采样，变化时绘制",
+          "tone": "muted"
+        }
+      ],
+      "version": "0.7.3",
+      "commit": "24a1c967eb26c3943641b5fad463a33cb159011c"
+    }
   },
-  "network": {
-    "source": "actual-cor-pty",
-    "lines": [
-      {
-        "text": "  CLASH OF RUST   /   TERMINAL   本机控制台",
-        "tone": "accent"
-      },
-      {
-        "text": "",
-        "tone": "plain"
-      },
-      {
-        "text": "   1 首页       2 节点       3 订阅       4 连接",
-        "tone": "accent"
-      },
-      {
-        "text": "   5 规则      [6 工具]      7 设置       8 操作",
-        "tone": "accent"
-      },
-      {
-        "text": "  ───────────────────────────────────────────────────────────────────────────────────────────────",
-        "tone": "muted"
-      },
-      {
-        "text": "  网站检查  1/12",
-        "tone": "accent"
-      },
-      {
-        "text": "  目标：github.com",
-        "tone": "plain"
-      },
-      {
-        "text": "  参数：默认检查",
-        "tone": "muted"
-      },
-      {
-        "text": "  快速定位解析、响应和实际命中规则；详细分析使用专项工具",
-        "tone": "muted"
-      },
-      {
-        "text": "",
-        "tone": "plain"
-      },
-      {
-        "text": "",
-        "tone": "plain"
-      },
-      {
-        "text": "",
-        "tone": "plain"
-      },
-      {
-        "text": "",
-        "tone": "plain"
-      },
-      {
-        "text": "",
-        "tone": "plain"
-      },
-      {
-        "text": "",
-        "tone": "plain"
-      },
-      {
-        "text": "",
-        "tone": "plain"
-      },
-      {
-        "text": "",
-        "tone": "plain"
-      },
-      {
-        "text": "",
-        "tone": "plain"
-      },
-      {
-        "text": "",
-        "tone": "plain"
-      },
-      {
-        "text": "",
-        "tone": "plain"
-      },
-      {
-        "text": "",
-        "tone": "plain"
-      },
-      {
-        "text": "",
-        "tone": "plain"
-      },
-      {
-        "text": "",
-        "tone": "plain"
-      },
-      {
-        "text": "",
-        "tone": "plain"
-      },
-      {
-        "text": "",
-        "tone": "plain"
-      },
-      {
-        "text": "",
-        "tone": "plain"
-      },
-      {
-        "text": "───────────────────────────────────────────────────────────────────────────────────────────────────",
-        "tone": "muted"
-      },
-      {
-        "text": "退出界面保留后台和代理",
-        "tone": "muted"
-      },
-      {
-        "text": "←→ 切换工具 · o 参数 · e 导出 · / 输入 · Enter 检查 · ↑↓ 结果 · Esc 取消 · q 退出",
-        "tone": "muted"
-      },
-      {
-        "text": "v0.7.3 · 本机后台 · 每秒采样，变化时绘制",
-        "tone": "muted"
-      }
-    ],
-    "version": "0.7.3",
-    "commit": "24a1c967eb26c3943641b5fad463a33cb159011c"
+  "en": {
+    "home": {
+      "source": "actual-cor-pty",
+      "lines": [
+        {
+          "text": "  CLASH OF RUST   /   TERMINAL   Local console",
+          "tone": "plain"
+        },
+        {
+          "text": "",
+          "tone": "plain"
+        },
+        {
+          "text": "  [1 Home]      2 Nodes       3 Subscriptions       4 Connections",
+          "tone": "plain"
+        },
+        {
+          "text": "   5 Rules       6 Network       7 Settings       8 Commands",
+          "tone": "plain"
+        },
+        {
+          "text": "  ───────────────────────────────────────────────────────────────────────────────────────────────",
+          "tone": "plain"
+        },
+        {
+          "text": "  Home · Enter to act, then confirm changes",
+          "tone": "plain"
+        },
+        {
+          "text": "  Core running · CLI backend · 0.7.3",
+          "tone": "plain"
+        },
+        {
+          "text": "  ↓ Download 0.0 KiB/s · ↑ Upload 0.0 KiB/s · Connections 0",
+          "tone": "plain"
+        },
+        {
+          "text": "  Reference route: Proxy → DIRECT",
+          "tone": "plain"
+        },
+        {
+          "text": "  › Stop core",
+          "tone": "plain"
+        },
+        {
+          "text": "    Language/语言 · English",
+          "tone": "plain"
+        },
+        {
+          "text": "    Proxy mode · Off",
+          "tone": "plain"
+        },
+        {
+          "text": "    Routing mode · Rule",
+          "tone": "plain"
+        },
+        {
+          "text": "    Active subscription · Example profile",
+          "tone": "plain"
+        },
+        {
+          "text": "    Claude protection · Off",
+          "tone": "plain"
+        },
+        {
+          "text": "    Check for updates · Not checked · automatic checks disabled",
+          "tone": "plain"
+        },
+        {
+          "text": "",
+          "tone": "plain"
+        },
+        {
+          "text": "",
+          "tone": "plain"
+        },
+        {
+          "text": "",
+          "tone": "plain"
+        },
+        {
+          "text": "",
+          "tone": "plain"
+        },
+        {
+          "text": "",
+          "tone": "plain"
+        },
+        {
+          "text": "",
+          "tone": "plain"
+        },
+        {
+          "text": "",
+          "tone": "plain"
+        },
+        {
+          "text": "",
+          "tone": "plain"
+        },
+        {
+          "text": "",
+          "tone": "plain"
+        },
+        {
+          "text": "",
+          "tone": "plain"
+        },
+        {
+          "text": "───────────────────────────────────────────────────────────────────────────────────────────────────",
+          "tone": "plain"
+        },
+        {
+          "text": "Quitting keeps the background and proxy running",
+          "tone": "plain"
+        },
+        {
+          "text": "↑↓ select · Enter action · r refresh · q quit",
+          "tone": "plain"
+        },
+        {
+          "text": "v0.7.3 · Local backend · samples every second; redraws on change",
+          "tone": "plain"
+        }
+      ],
+      "version": "0.7.3",
+      "commit": "24a1c967eb26c3943641b5fad463a33cb159011c"
+    },
+    "network": {
+      "source": "actual-cor-pty",
+      "lines": [
+        {
+          "text": "  CLASH OF RUST   /   TERMINAL   Local console",
+          "tone": "plain"
+        },
+        {
+          "text": "",
+          "tone": "plain"
+        },
+        {
+          "text": "   1 Home       2 Nodes       3 Subscriptions       4 Connections",
+          "tone": "plain"
+        },
+        {
+          "text": "   5 Rules      [6 Network]      7 Settings       8 Commands",
+          "tone": "plain"
+        },
+        {
+          "text": "  ───────────────────────────────────────────────────────────────────────────────────────────────",
+          "tone": "plain"
+        },
+        {
+          "text": "  Website check  1/12",
+          "tone": "plain"
+        },
+        {
+          "text": "  Target: github.com",
+          "tone": "plain"
+        },
+        {
+          "text": "  Parameters: Default check",
+          "tone": "plain"
+        },
+        {
+          "text": "  Check resolution, response, and matching rules.",
+          "tone": "plain"
+        },
+        {
+          "text": "",
+          "tone": "plain"
+        },
+        {
+          "text": "",
+          "tone": "plain"
+        },
+        {
+          "text": "",
+          "tone": "plain"
+        },
+        {
+          "text": "",
+          "tone": "plain"
+        },
+        {
+          "text": "",
+          "tone": "plain"
+        },
+        {
+          "text": "",
+          "tone": "plain"
+        },
+        {
+          "text": "",
+          "tone": "plain"
+        },
+        {
+          "text": "",
+          "tone": "plain"
+        },
+        {
+          "text": "",
+          "tone": "plain"
+        },
+        {
+          "text": "",
+          "tone": "plain"
+        },
+        {
+          "text": "",
+          "tone": "plain"
+        },
+        {
+          "text": "",
+          "tone": "plain"
+        },
+        {
+          "text": "",
+          "tone": "plain"
+        },
+        {
+          "text": "",
+          "tone": "plain"
+        },
+        {
+          "text": "",
+          "tone": "plain"
+        },
+        {
+          "text": "",
+          "tone": "plain"
+        },
+        {
+          "text": "",
+          "tone": "plain"
+        },
+        {
+          "text": "───────────────────────────────────────────────────────────────────────────────────────────────────",
+          "tone": "plain"
+        },
+        {
+          "text": "Quitting keeps the background and proxy running",
+          "tone": "plain"
+        },
+        {
+          "text": "←→ tools · o options · e export · / input · Enter check · ↑↓ results · Esc cancel · q quit",
+          "tone": "plain"
+        },
+        {
+          "text": "v0.7.3 · Local backend · samples every second; redraws on change",
+          "tone": "plain"
+        }
+      ],
+      "version": "0.7.3",
+      "commit": "24a1c967eb26c3943641b5fad463a33cb159011c"
+    }
   }
 }

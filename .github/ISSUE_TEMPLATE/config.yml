@@ -1,5 +1,5 @@
 blank_issues_enabled: true
 contact_links:
   - name: 使用帮助 / User guide
-    url: https://github.com/Fu021/Clash-of-Rust/blob/main/docs/README.md
-    about: 查阅安装、配置和诊断指南（中文）。 / Installation, setup, and troubleshooting guides (Chinese).
+    url: https://clash-of-rust.fu021.shop/guide
+    about: 查阅中英文使用手册和快速上手指南。 / Browse the user manuals and quick-start guides in Chinese and English.

@@ -151,17 +151,6 @@ for (const button of $$("[data-download-button]")) {
   button.href = `${button.getAttribute("href").split("#")[0]}#${platform}`;
 }
 
-/* Light and dark screenshots */
-for (const figure of $$("[data-shots]")) {
-  const buttons = $$("[data-shot]", figure);
-  for (const button of buttons) {
-    button.addEventListener("click", () => {
-      for (const other of buttons) other.setAttribute("aria-pressed", String(other === button));
-      for (const image of $$("img[data-theme]", figure)) image.hidden = image.dataset.theme !== button.dataset.shot;
-    });
-  }
-}
-
 function animateDetails(details, content) {
   const summary = $("summary", details);
   const motion = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -226,13 +215,24 @@ for (const toc of $$("[data-toc]")) {
 }
 
 const imageView = $("[data-image-view]");
+const captureLinks = $$("[data-enlarge]");
+let imageOpener;
+function syncCaptureLinks() {
+  const dark = document.documentElement.dataset.theme === "dark";
+  for (const link of captureLinks) {
+    const source = dark ? $("source[data-night]", link) : null;
+    link.href = source ? source.srcset : $("img", link).src;
+  }
+  if (imageView?.open && imageOpener) $("img", imageView).src = imageOpener.href;
+}
+document.addEventListener("site-theme-change", syncCaptureLinks);
+syncCaptureLinks();
 if (imageView && typeof imageView.showModal === "function") {
-  let opener;
   $("[data-image-close]", imageView).addEventListener("click", () => imageView.close());
-  for (const link of $$("[data-enlarge]")) link.addEventListener("click", event => {
+  for (const link of captureLinks) link.addEventListener("click", event => {
     if (event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     event.preventDefault();
-    opener = link;
+    imageOpener = link;
     const image = $("img", imageView);
     image.src = link.href;
     image.alt = $("img", link).alt;
@@ -245,7 +245,8 @@ if (imageView && typeof imageView.showModal === "function") {
   });
   imageView.addEventListener("close", () => {
     $("img", imageView).removeAttribute("src");
-    opener?.focus({ preventScroll: true });
+    imageOpener?.focus({ preventScroll: true });
+    imageOpener = undefined;
   });
 }
 

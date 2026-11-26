@@ -5,7 +5,7 @@
   <div class="banner scene"><picture><source media="(max-width: 640px)" srcset="{{root}}assets/terminal-small.webp"><img src="{{root}}assets/terminal.webp" width="2172" height="724" alt="A blue cat watches an illuminated control panel in a railway signal box at night."></picture></div>
 </section>
 <div class="wrap doc with-toc">
-  <nav class="toc" aria-label="On this page"><p class="label">On this page</p><a href="#first">Open and exit</a><a href="#keys">Keyboard controls</a><a href="#pages">Eight pages</a><a href="#nodes">Node selection</a><a href="#connections">Connection details</a><a href="#network">Network tools</a><a href="#settings">Settings forms</a><a href="#manage">Actions and authorization</a><a href="#protection">Protection and read-only access</a><a href="#trouble">Recovery</a></nav>
+  <nav class="toc" aria-label="On this page"><p class="label">On this page</p><a href="#first">Open and exit</a><a href="#keys">Keyboard controls</a><a href="#pages">Eight pages</a><a href="#nodes">Node selection</a><a href="#connections">Connection details</a><a href="#network">Network tools</a><a href="#settings">Settings forms</a><a href="#manage">Commands and authorization</a><a href="#protection">Protection and read-only access</a><a href="#trouble">Recovery</a></nav>
   <div>
     <section id="first">
       <h2>Open and exit</h2>
@@ -14,7 +14,7 @@
 cor ui --demo</pre>
       <p>Windows, Linux and macOS installers include cor. Use a real interactive terminal. Demo mode uses fictional data, without network access or saving.</p>
       <p>The layout adapts to terminal size. Very small windows prioritize the focused item or confirmation prompt. You can scroll through long connection details.</p>
-      <p>Opening and browsing the interface leave the backend and core in their current state. To start them, choose Start backend and core on Home or run <code>start</code> from Actions. <kbd>q</kbd> / <kbd>Ctrl+C</kbd> exits while the existing backend and proxy remain running. Emoji rendering depends on your terminal font.</p>
+      <p>Opening and browsing the interface leave the backend and core in their current state. To start them, choose Start core on Home or run <code>start</code> from Commands. <kbd>q</kbd> / <kbd>Ctrl+C</kbd> exits while the existing backend and proxy remain running. Emoji rendering depends on your terminal font.</p>
       {{terminal:home}}
     </section>
     <section id="keys">
@@ -37,9 +37,9 @@ cor ui --demo</pre>
         <div class="sleepers"><dt>3 · Profiles</dt><dd>View saved profiles and choose the current profile.</dd></div>
         <div class="sleepers"><dt>4 · Connections</dt><dd>Filter active connections, inspect details and request closure.</dd></div>
         <div class="sleepers"><dt>5 · Rules</dt><dd>View profile, custom and shortcut rules, and manage supported entries.</dd></div>
-        <div class="sleepers"><dt>6 · Tools</dt><dd>Choose an on-demand tool, enter its target and read the result.</dd></div>
+        <div class="sleepers"><dt>6 · Network</dt><dd>Choose an on-demand tool, enter its target and read the result.</dd></div>
         <div class="sleepers"><dt>7 · Settings</dt><dd>Inspect values, edit supported fields, review and submit.</dd></div>
-        <div class="sleepers"><dt>8 · Actions</dt><dd>Forms generated from the command catalog cover profiles, rules, updates, services and more.</dd></div>
+        <div class="sleepers"><dt>8 · Commands</dt><dd>Forms generated from the command catalog cover profiles, rules, updates, services and more.</dd></div>
       </dl>
       <p>Only the current page's data is read, sampled once a second. Drawing updates changed lines, without accumulating connection or command-output history.</p>
     </section>
@@ -66,10 +66,10 @@ cor ui --demo</pre>
       <h2>Settings forms</h2>
       <p>Press <kbd>7</kbd> to inspect settings. Drafts are submitted only after confirmation. Cancelling a field restores its previous value; leaving the form discards drafts. The backend still validates ranges, permission and current state.</p>
       <p>Ports, DNS/Fake-IP, IPv6, UDP, update channels and intervals, and run mode have switches, choices or editors. Use <kbd>Enter</kbd>, Space or arrow keys to choose, then move down to Save settings and confirm. Ordinary settings save inside TUI and read back the result; failures keep drafts. Proxy and protection authorization still uses the normal terminal. GUI accent, font and tray preferences stay outside common terminal settings; advanced commands remain available.</p>
-      <p>Press <kbd>3</kbd> to choose and save the current profile, or <kbd>5</kbd> to view rules and open shortcut rule management. Shortcuts already included by the profile cannot be added again. Profile source editing and complex rule operations remain available through Actions.</p>
+      <p>Press <kbd>3</kbd> to choose and save the current profile, or <kbd>5</kbd> to view rules and open shortcut rule management. Shortcuts already included by the profile cannot be added again. Profile source editing and complex rule operations remain available through Commands.</p>
     </section>
     <section id="manage">
-      <h2>Actions and authorization</h2>
+      <h2>Commands and authorization</h2>
       <p>Press <kbd>8</kbd> and search for an action such as <code>profile add</code>, <code>rule add</code>, <code>update install</code> or <code>service status</code>. Fill positional arguments and options separately, without shell quotes. Arrays use JSON; boolean options accept <code>true</code> or an empty field.</p>
       <p>Confirmation temporarily restores the normal terminal for output, download progress and authorization. It skips neither confirmation nor system permission. Press Enter to return; software installation exits TUI after completion or handoff to release files that need replacement.</p>
       <p>Ctrl+C during authorization or a continuous command exits the whole CLI; already submitted work may continue. Foreground <code>run</code> and another <code>ui</code> session remain direct CLI entries.</p>

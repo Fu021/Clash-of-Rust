@@ -65,21 +65,24 @@ CAPTURES = {
 
 
 def render_capture(name, lang, root, captures):
-    capture = captures[name]
+    capture = captures[lang][name]
     label = CAPTURES[name][0 if lang == "zh" else 1]
     phone = capture["platform"] == "android"
     platform = "Android" if phone else ("桌面" if lang == "zh" else "Desktop")
     note = "演示数据" if lang == "zh" else "Demo data"
     expand = "放大：" if lang == "zh" else "Enlarge: "
-    return (f'<figure class="product-shot{" phone" if phone else ""}" data-capture-version="{escape(capture["version"])}">'
-            f'<a class="frame capture-open" href="{root}assets/{escape(capture["file"])}" data-enlarge '
-            f'aria-label="{expand}{escape(label)}"><img src="{root}assets/{escape(capture["file"])}" '
-            f'width="{capture["width"]}" height="{capture["height"]}" alt="{escape(label)}" loading="lazy"></a>'
+    light, dark = (f'{root}assets/{escape(capture["files"][theme])}' for theme in ("light", "dark"))
+    return (f'<figure class="product-shot{" phone" if phone else ""}" data-capture-name="{name}" data-capture-language="{lang}" '
+            f'data-capture-version="{escape(capture["version"])}">'
+            f'<a class="frame capture-open" href="{light}" data-enlarge aria-label="{expand}{escape(label)}">'
+            f'<picture><source data-night media="(prefers-color-scheme: dark)" srcset="{dark}">'
+            f'<img src="{light}" width="{capture["width"]}" height="{capture["height"]}" '
+            f'alt="{escape(label)}" loading="lazy"></picture></a>'
             f'<figcaption>{escape(label)} · {platform} · {escape(capture["version"])} · {note}</figcaption></figure>')
 
 
 def render_terminal(name, lang, frames):
-    frame = frames[name]
+    frame = frames[lang][name]
     if frame["source"] != "actual-cor-pty":
         raise ValueError("Terminal illustrations must use actual PTY frames")
     tones = {"plain", "muted", "accent", "selected", "warning"}
@@ -90,7 +93,8 @@ def render_terminal(name, lang, frames):
         rule = " terminal-rule" if re.fullmatch(r"─+", line["text"].strip()) else ""
         lines.append(f'<span class="tone-{line["tone"]}{rule}">{escape(line["text"])}</span>')
     label = "实际终端画面 · 固定测试输入" if lang == "zh" else "Actual terminal frame · Fixed test input"
-    return (f'<figure class="product-shot terminal-shot" data-capture-version="{escape(frame["version"])}">'
+    return (f'<figure class="product-shot terminal-shot" data-capture-language="{lang}" '
+            f'data-capture-version="{escape(frame["version"])}">'
             '<div class="terminal-title" aria-hidden="true">cor ui</div>'
             f'<pre class="terminal-capture" tabindex="0" aria-label="{label}">' + "\n".join(lines) + "</pre>"
             f'<figcaption>{label} · Linux · {escape(frame["version"])}</figcaption></figure>')

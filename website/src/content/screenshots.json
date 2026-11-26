@@ -1,72 +1,174 @@
 {
-  "home": {
-    "file": "app-home.png",
-    "width": 1200,
-    "height": 800,
-    "platform": "desktop",
-    "version": "0.7.3",
-    "commit": "24a1c967eb26c3943641b5fad463a33cb159011c",
-    "theme": "light",
-    "source": "production-slint-preview"
+  "zh": {
+    "home": {
+      "files": {
+        "light": "app-home.png",
+        "dark": "app-home-dark.png"
+      },
+      "width": 1200,
+      "height": 800,
+      "platform": "desktop",
+      "version": "0.7.3",
+      "commit": "24a1c967eb26c3943641b5fad463a33cb159011c",
+      "source": "production-slint-preview"
+    },
+    "nodes": {
+      "files": {
+        "light": "app-nodes.png",
+        "dark": "app-nodes-dark.png"
+      },
+      "width": 1200,
+      "height": 800,
+      "platform": "desktop",
+      "version": "0.7.3",
+      "commit": "24a1c967eb26c3943641b5fad463a33cb159011c",
+      "source": "production-slint-preview"
+    },
+    "subscriptions": {
+      "files": {
+        "light": "app-subscriptions.png",
+        "dark": "app-subscriptions-dark.png"
+      },
+      "width": 1200,
+      "height": 800,
+      "platform": "desktop",
+      "version": "0.7.3",
+      "commit": "24a1c967eb26c3943641b5fad463a33cb159011c",
+      "source": "production-slint-preview"
+    },
+    "rules": {
+      "files": {
+        "light": "app-rules.png",
+        "dark": "app-rules-dark.png"
+      },
+      "width": 1200,
+      "height": 800,
+      "platform": "desktop",
+      "version": "0.7.3",
+      "commit": "24a1c967eb26c3943641b5fad463a33cb159011c",
+      "source": "production-slint-preview"
+    },
+    "network": {
+      "files": {
+        "light": "app-network.png",
+        "dark": "app-network-dark.png"
+      },
+      "width": 1200,
+      "height": 800,
+      "platform": "desktop",
+      "version": "0.7.3",
+      "commit": "24a1c967eb26c3943641b5fad463a33cb159011c",
+      "source": "production-slint-preview"
+    },
+    "protection": {
+      "files": {
+        "light": "app-protection.png",
+        "dark": "app-protection-dark.png"
+      },
+      "width": 1200,
+      "height": 800,
+      "platform": "desktop",
+      "version": "0.7.3",
+      "commit": "24a1c967eb26c3943641b5fad463a33cb159011c",
+      "source": "production-slint-preview"
+    },
+    "applications": {
+      "files": {
+        "light": "app-applications.png",
+        "dark": "app-applications-dark.png"
+      },
+      "width": 393,
+      "height": 852,
+      "platform": "android",
+      "version": "0.7.3",
+      "commit": "24a1c967eb26c3943641b5fad463a33cb159011c",
+      "source": "production-slint-preview"
+    }
   },
-  "nodes": {
-    "file": "app-nodes.png",
-    "width": 1200,
-    "height": 800,
-    "platform": "desktop",
-    "version": "0.7.3",
-    "commit": "24a1c967eb26c3943641b5fad463a33cb159011c",
-    "theme": "light",
-    "source": "production-slint-preview"
-  },
-  "subscriptions": {
-    "file": "app-subscriptions.png",
-    "width": 1200,
-    "height": 800,
-    "platform": "desktop",
-    "version": "0.7.3",
-    "commit": "24a1c967eb26c3943641b5fad463a33cb159011c",
-    "theme": "light",
-    "source": "production-slint-preview"
-  },
-  "rules": {
-    "file": "app-rules.png",
-    "width": 1200,
-    "height": 800,
-    "platform": "desktop",
-    "version": "0.7.3",
-    "commit": "24a1c967eb26c3943641b5fad463a33cb159011c",
-    "theme": "light",
-    "source": "production-slint-preview"
-  },
-  "network": {
-    "file": "app-network.png",
-    "width": 1200,
-    "height": 800,
-    "platform": "desktop",
-    "version": "0.7.3",
-    "commit": "24a1c967eb26c3943641b5fad463a33cb159011c",
-    "theme": "light",
-    "source": "production-slint-preview"
-  },
-  "protection": {
-    "file": "app-protection.png",
-    "width": 1200,
-    "height": 800,
-    "platform": "desktop",
-    "version": "0.7.3",
-    "commit": "24a1c967eb26c3943641b5fad463a33cb159011c",
-    "theme": "light",
-    "source": "production-slint-preview"
-  },
-  "applications": {
-    "file": "app-applications.png",
-    "width": 393,
-    "height": 852,
-    "platform": "android",
-    "version": "0.7.3",
-    "commit": "24a1c967eb26c3943641b5fad463a33cb159011c",
-    "theme": "light",
-    "source": "production-slint-preview"
+  "en": {
+    "home": {
+      "files": {
+        "light": "app-home-en.png",
+        "dark": "app-home-en-dark.png"
+      },
+      "width": 1200,
+      "height": 800,
+      "platform": "desktop",
+      "version": "0.7.3",
+      "commit": "24a1c967eb26c3943641b5fad463a33cb159011c",
+      "source": "production-slint-preview"
+    },
+    "nodes": {
+      "files": {
+        "light": "app-nodes-en.png",
+        "dark": "app-nodes-en-dark.png"
+      },
+      "width": 1200,
+      "height": 800,
+      "platform": "desktop",
+      "version": "0.7.3",
+      "commit": "24a1c967eb26c3943641b5fad463a33cb159011c",
+      "source": "production-slint-preview"
+    },
+    "subscriptions": {
+      "files": {
+        "light": "app-subscriptions-en.png",
+        "dark": "app-subscriptions-en-dark.png"
+      },
+      "width": 1200,
+      "height": 800,
+      "platform": "desktop",
+      "version": "0.7.3",
+      "commit": "24a1c967eb26c3943641b5fad463a33cb159011c",
+      "source": "production-slint-preview"
+    },
+    "rules": {
+      "files": {
+        "light": "app-rules-en.png",
+        "dark": "app-rules-en-dark.png"
+      },
+      "width": 1200,
+      "height": 800,
+      "platform": "desktop",
+      "version": "0.7.3",
+      "commit": "24a1c967eb26c3943641b5fad463a33cb159011c",
+      "source": "production-slint-preview"
+    },
+    "network": {
+      "files": {
+        "light": "app-network-en.png",
+        "dark": "app-network-en-dark.png"
+      },
+      "width": 1200,
+      "height": 800,
+      "platform": "desktop",
+      "version": "0.7.3",
+      "commit": "24a1c967eb26c3943641b5fad463a33cb159011c",
+      "source": "production-slint-preview"
+    },
+    "protection": {
+      "files": {
+        "light": "app-protection-en.png",
+        "dark": "app-protection-en-dark.png"
+      },
+      "width": 1200,
+      "height": 800,
+      "platform": "desktop",
+      "version": "0.7.3",
+      "commit": "24a1c967eb26c3943641b5fad463a33cb159011c",
+      "source": "production-slint-preview"
+    },
+    "applications": {
+      "files": {
+        "light": "app-applications-en.png",
+        "dark": "app-applications-en-dark.png"
+      },
+      "width": 393,
+      "height": 852,
+      "platform": "android",
+      "version": "0.7.3",
+      "commit": "24a1c967eb26c3943641b5fad463a33cb159011c",
+      "source": "production-slint-preview"
+    }
   }
 }
