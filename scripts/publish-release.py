@@ -41,15 +41,15 @@ PACKAGES = {
     'package-android-x64': 'android-x64.apk',
 }
 DOWNLOAD_BUTTONS = (
-    ('Windows', 'package-windows-x64', 'Setup', 'x64', '0078D4', ''),
-    ('Windows', 'package-windows-arm64', 'Setup', 'ARM64', '0078D4', ''),
-    ('Linux', 'package-linux-x64', 'DEB', 'x64', 'E95420', 'linux'),
-    ('Linux', 'package-linux-arm64', 'DEB', 'ARM64', 'E95420', 'linux'),
-    ('macOS', 'package-macos-arm64', 'DMG', 'Apple_Silicon', '555555', 'apple'),
-    ('macOS', 'package-macos-x64', 'DMG', 'Intel_x64', '555555', 'apple'),
-    ('Android', 'package-android-arm64', 'APK', 'ARM64', '3DDC84', 'android'),
-    ('Android', 'package-android-armv7', 'APK', 'ARMv7', '3DDC84', 'android'),
-    ('Android', 'package-android-x64', 'APK', 'x64', '3DDC84', 'android'),
+    ('Windows', 'package-windows-x64', 'Setup', 'x64'),
+    ('Windows', 'package-windows-arm64', 'Setup', 'ARM64'),
+    ('Linux', 'package-linux-x64', 'DEB', 'x64'),
+    ('Linux', 'package-linux-arm64', 'DEB', 'ARM64'),
+    ('macOS', 'package-macos-arm64', 'DMG', 'Apple Silicon'),
+    ('macOS', 'package-macos-x64', 'DMG', 'Intel x64'),
+    ('Android', 'package-android-arm64', 'APK', 'ARM64'),
+    ('Android', 'package-android-armv7', 'APK', 'ARMv7'),
+    ('Android', 'package-android-x64', 'APK', 'x64'),
 )
 PACKAGE_JOBS = {name for name in PACKAGES if name.startswith('package-android-')}
 
@@ -212,19 +212,21 @@ def release_metadata(commit, tag=None, notes_path=None, check_only=False, prerel
     return version, expected_tag, notes
 
 
-def release_notes_with_downloads(notes, repo, version, tag, *, rpm_arches=(), include_arch=False):
+def release_notes_with_downloads(notes, repo, version, tag, *, commit, rpm_arches=(), include_arch=False):
     require(bool(re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repo)), 'Invalid repository path')
     require(validate_version(version) == version and tag == 'v' + version, 'Invalid release identity')
+    require(bool(re.fullmatch(r'[a-f0-9]{40}', commit)), 'Invalid release commit')
     require({item[1] for item in DOWNLOAD_BUTTONS} == set(PACKAGES)
             and len(DOWNLOAD_BUTTONS) == len(PACKAGES), 'Download buttons do not match packages')
     rows = {}
     release_tag = urllib.parse.quote(tag, safe='')
+    badge_base = f'https://raw.githubusercontent.com/{repo}/{commit}/docs/releases/badges'
     buttons = (*DOWNLOAD_BUTTONS,
-               *(('Linux', f'linux-rpm-{arch}', 'RPM', {'x64': 'x64', 'arm64': 'ARM64'}[arch],
-                  'E95420', 'linux') for arch in rpm_arches))
+               *(('Linux', f'linux-rpm-{arch}', 'RPM', {'x64': 'x64', 'arm64': 'ARM64'}[arch])
+                 for arch in rpm_arches))
     if include_arch:
-        buttons += (('Linux', 'linux-arch-x64', 'Arch pkg', 'x64', '1793D1', 'archlinux'),)
-    for system, key, kind, architecture, color, logo in buttons:
+        buttons += (('Linux', 'linux-arch-x64', 'Arch pkg', 'x64'),)
+    for system, key, kind, architecture in buttons:
         if key == 'linux-arch-x64':
             name = arch_filename(version)
         elif kind == 'RPM':
@@ -233,15 +235,11 @@ def release_notes_with_downloads(notes, repo, version, tag, *, rpm_arches=(), in
             name = f'Clash-of-Rust-{version}-{PACKAGES[key]}'
         asset = urllib.parse.quote(name, safe='')
         download = f'https://github.com/{repo}/releases/download/{release_tag}/{asset}'
-        query = urllib.parse.urlencode({'logo': logo, 'logoColor': 'white'}) if logo else ''
-        badge = f'https://img.shields.io/badge/{urllib.parse.quote(kind)}-{architecture}-{color}'
-        if query:
-            badge += '?' + query
+        badge = f"{badge_base}/{key.removeprefix('package-')}.svg"
         count = (f'https://img.shields.io/github/downloads/{repo}/{release_tag}/{asset}'
                  '?label=downloads&displayAssetName=false')
-        label = architecture.replace('_', ' ')
-        text = f'[![{system} {kind} {label}]({badge})]({download})'
-        text += f' [![{system} {label} downloads]({count})]({download})'
+        text = f'[![{system} {kind} {architecture}]({badge})]({download})'
+        text += f' [![{system} {architecture} downloads]({count})]({download})'
         if system == 'Android' and architecture == 'ARM64':
             text += ' （多数手机和平板）'
         rows.setdefault(system, []).append(text)
@@ -573,7 +571,7 @@ def main():
     if args.check:
         print('Check complete; no release changes made')
         return
-    notes = release_notes_with_downloads(notes, repo, version, tag, rpm_arches=rpm_arches,
+    notes = release_notes_with_downloads(notes, repo, version, tag, commit=commit, rpm_arches=rpm_arches,
                                          include_arch=arch_package is not None)
     url = publish(client, commit, tag, notes, files, source_branch=run['head_branch'], prerelease=args.prerelease)
     if os.environ.get('GITHUB_STEP_SUMMARY'):

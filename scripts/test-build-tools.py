@@ -10418,7 +10418,7 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(release.filenames(self.version, include_arch=True) - release.filenames(self.version),
                          {name, name+'.sha256'})
         self.assertIn(name, release.release_notes_with_downloads(
-            self.notes, 'example/project', self.version, self.tag, include_arch=True))
+            self.notes, 'example/project', self.version, self.tag, commit=self.commit, include_arch=True))
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
             deb = directory/f'Clash-of-Rust-{self.version}-linux-amd64.deb'
@@ -10738,10 +10738,23 @@ class ReleaseTests(unittest.TestCase):
                 with self.assertRaises(ValueError):release.release_metadata(self.commit,notes_path=path)
 
     def test_download_badges_target_each_asset_for_stable_and_prerelease(self):
-        for version in ['0.6.6', '0.6.7-fix.1.example']:
+        for version, expanded in [('0.6.6', False), ('0.6.7-fix.1.example', True)]:
             with self.subTest(version=version):
                 tag = 'v' + version
-                notes = release.release_notes_with_downloads(self.notes, 'example/project', version, tag)
+                rpm_arches = ('x64', 'arm64') if expanded else ()
+                notes = release.release_notes_with_downloads(
+                    self.notes, 'example/project', version, tag, commit=self.commit,
+                    rpm_arches=rpm_arches, include_arch=expanded)
+                expected_badges = {
+                    f'Clash-of-Rust-{version}-{suffix}': key.removeprefix('package-')
+                    for key, suffix in release.PACKAGES.items()
+                }
+                if expanded:
+                    expected_badges.update({
+                        f'Clash-of-Rust-{version}-linux-x86_64.rpm': 'linux-rpm-x64',
+                        f'Clash-of-Rust-{version}-linux-aarch64.rpm': 'linux-rpm-arm64',
+                        f'Clash-of-Rust-{version}-linux-x86_64.pkg.tar.zst': 'linux-arch-x64',
+                    })
                 self.assertTrue(notes.startswith(self.notes.rstrip()))
                 rows = [line.split('|')[1].strip() for line in notes.splitlines()
                         if line.startswith('| ')][2:]
@@ -10749,41 +10762,50 @@ class ReleaseTests(unittest.TestCase):
                 self.assertEqual(notes.count('（多数手机和平板）'), 1)
                 self.assertRegex(notes, r'\[!\[Android ARM64 downloads\]\([^)]+\)\]'
                                         r'\([^)]+\) （多数手机和平板）<br>')
-                self.assertEqual(notes.count('https://img.shields.io/badge/'), len(release.PACKAGES))
-                self.assertEqual(notes.count('https://img.shields.io/github/downloads/'), len(release.PACKAGES))
-                self.assertEqual(notes.count('displayAssetName=false'), len(release.PACKAGES))
+                self.assertEqual(notes.count('https://raw.githubusercontent.com/'), len(expected_badges))
+                self.assertEqual(notes.count('https://img.shields.io/github/downloads/'), len(expected_badges))
+                self.assertEqual(notes.count('displayAssetName=false'), len(expected_badges))
                 buttons = re.findall(r'\[!\[([^]]+)\]\(([^)]+)\)\]\(([^)]+)\)', notes)
-                self.assertEqual(len(buttons), 2 * len(release.PACKAGES))
+                self.assertEqual(len(buttons), 2 * len(expected_badges))
                 downloads = []
                 for label, image_url, download_url in buttons:
                     image = urllib.parse.urlparse(image_url)
                     download = urllib.parse.urlparse(download_url)
-                    self.assertEqual(image.netloc, 'img.shields.io')
                     self.assertEqual(download.netloc, 'github.com')
                     self.assertEqual(urllib.parse.unquote(download.path).split('/')[-2], tag)
+                    filename = urllib.parse.unquote(download.path).split('/')[-1]
                     if label.endswith(' downloads'):
+                        self.assertEqual(image.netloc, 'img.shields.io')
                         self.assertEqual(urllib.parse.parse_qs(image.query),
                                          {'label': ['downloads'], 'displayAssetName': ['false']})
                         self.assertEqual(urllib.parse.unquote(image.path).split('/')[-2], tag)
                         self.assertEqual(image.path.split('/')[-1], download.path.split('/')[-1])
-                    downloads.append(urllib.parse.unquote(download.path).split('/')[-1])
-                self.assertEqual(set(downloads),
-                                 {'Clash-of-Rust-' + version + '-' + suffix for suffix in release.PACKAGES.values()})
-                for suffix in release.PACKAGES.values():
-                    filename = 'Clash-of-Rust-' + version + '-' + suffix
+                    else:
+                        badge_path = f'docs/releases/badges/{expected_badges[filename]}.svg'
+                        self.assertEqual(image_url,
+                                         f'https://raw.githubusercontent.com/example/project/{self.commit}/{badge_path}')
+                        svg = ET.parse(build.ROOT/badge_path).getroot()
+                        self.assertEqual(svg.tag, '{http://www.w3.org/2000/svg}svg')
+                        self.assertEqual(svg.attrib['aria-label'].replace(': ', ' ', 1), label.split(' ', 1)[1])
+                    downloads.append(filename)
+                self.assertEqual(set(downloads), set(expected_badges))
+                for filename in expected_badges:
                     self.assertEqual(downloads.count(filename), 2)
                 self.assertNotIn('/downloads-pre/', notes)
                 self.assertNotIn('/latest/', notes)
                 self.assertNotIn('下载次数包含重复下载', notes)
                 self.assertNotIn('SHA256 校验文件位于下方 Assets', notes)
         with self.assertRaises(ValueError):
-            release.release_notes_with_downloads(self.notes, 'example/project', '0.6.6', 'v0.6.5')
+            release.release_notes_with_downloads(self.notes, 'example/project', '0.6.6', 'v0.6.5', commit=self.commit)
+        with self.assertRaisesRegex(ValueError, 'Invalid release commit'):
+            release.release_notes_with_downloads(self.notes, 'example/project', '0.6.6', 'v0.6.6', commit='main')
 
     def test_download_table_precedes_long_release_details(self):
         version = '0.6.7-fix.7.settings-storage'
         details = '## 更新\n\n' + '完整保留更新说明。\n' * 2000
         notes = '# ' + version + '\n\n' + details
-        result = release.release_notes_with_downloads(notes, 'example/project', version, 'v' + version)
+        result = release.release_notes_with_downloads(notes, 'example/project', version, 'v' + version,
+                                                      commit=self.commit)
         self.assertTrue(result.startswith('# ' + version + '\n\n## 下载\n'))
         self.assertTrue(result.endswith(details.rstrip() + '\n'))
         downloads = result.split('## 更新', 1)[0]
