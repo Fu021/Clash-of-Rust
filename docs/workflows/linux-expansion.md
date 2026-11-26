@@ -32,6 +32,8 @@ GUI 夹具收到中断信号后完成清理并保留原始失败。测试账户�
 | openSUSE Compatibility | Leap 16.0、16.1、Tumbleweed 20261123（均有 x64、ARM64） | 基础验收使用官方容器，Zypper 安装同源 RPM |
 | Arch Linux Compatibility | 官方 `base-20261108.0.623074` 容器（x64），使用 2026-11-15 签名软件源 | `makepkg` 从同源 DEB 生成原生包，再由 `pacman` 安装 |
 
+[Fedora 官方容器](https://quay.io/repository/fedora/fedora)的固定摘要返回 `MANIFEST_UNKNOWN` 时，从同一 Fedora 版本的官方标签取得新索引，核对索引和两种架构的清单摘要，更新固定值后重新验收。
+
 Pop!_OS 22.04 的 ARM64 介质为 [Raspberry Pi 4 板级镜像](https://iso.pop-os.org/22.04/arm64/raspi/4/pop-os_22.04_arm64_raspi_4.img.xz)，该版本仅在矩阵中覆盖 x64。Pop!_OS 24.04 ARM64 的历史本地完整验收使用 [官方通用镜像](https://system76.com/download-pop/)。
 
 x64 跨版本更新使用 System76 22.04 build 58、24.04 build 20，Zorin 17.3 Core r2、18.1 Core ISO，以及 Fedora Cloud Base 44-1.7、45-1.4。ISO 来宾离线安装后从系统盘启动。

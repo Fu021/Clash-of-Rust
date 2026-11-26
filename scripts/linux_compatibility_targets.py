@@ -16,7 +16,7 @@ BASIC_CONTAINER_IMAGES = {
     ('ubuntu', '20.04'): 'docker.io/library/ubuntu@sha256:8feb4d8ca5354def3d8fce243717141ce31e2c428701f6682bd2fafe15388214',
     ('debian', '12'): 'docker.io/library/debian@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc',
     ('debian', '13'): 'docker.io/library/debian@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2',
-    ('fedora', '44'): 'quay.io/fedora/fedora@sha256:88551ae57826f9eaeb70b9016bb54f5758cbe1a724bb731d9ec211c274f55f05',
+    ('fedora', '44'): 'quay.io/fedora/fedora@sha256:c2311603edaa76512f78e9edbb2b5b3903b3ad5bbc43a94ecb2e6c5c501d5f0c',
     ('fedora', '45'): 'quay.io/fedora/fedora@sha256:92837d4834c1cff45cc2d534b655489b8e536271de1897932117e396cc9980c5',
     ('linuxmint', '21.3'): JAMMY_CONTAINER,
     ('linuxmint', '22.3'): NOBLE_CONTAINER,
