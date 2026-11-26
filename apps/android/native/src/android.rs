@@ -189,11 +189,11 @@ pub extern "system" fn Java_org_clashofrust_android_CoreBridge_nativePrepareGeo(
             let runtime = runtime.try_to_string(env)?;
             let resources = std::path::Path::new(&resources);
             let runtime = std::path::Path::new(&runtime);
-            let result = if apply != 0 {
-                core::geodata::seed(resources, runtime, allow_upgrade != 0)
+            let result = if apply {
+                core::geodata::seed(resources, runtime, allow_upgrade)
                     .map(|_| json!({"needed":false}))
             } else {
-                core::geodata::needs_seed(resources, runtime, allow_upgrade != 0)
+                core::geodata::needs_seed(resources, runtime, allow_upgrade)
                     .map(|needed| json!({"needed":needed}))
             };
             let response = result.unwrap_or_else(|error| json!({"error":format!("{error:#}")}));
