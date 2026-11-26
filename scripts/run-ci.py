@@ -32,6 +32,10 @@ def main():
     run(['cargo', 'build', *packages, '--release', '--locked', '--bins'])
     workspace_sources(ROOT, save=True)
     compiler_cache_checkpoint(ROOT)
+    if not extended and args.system == 'macos':
+        run(['cargo', 'test', '-p', 'clash-client-runtime', '--lib', '--release', '--locked',
+             'platform::macos::native_proxy::tests::preferences_lock_retries_only_busy_within_budget',
+             '--', '--exact'])
     if not extended and args.system == 'macos' and desktop_ui_tests():
         for case in ('core_initialization_preserves_a_tray_failure_as_a_recoverable_warning',
                      'menu_bar_failure_keeps_native_detail_when_language_changes',

@@ -3362,6 +3362,29 @@ class BuildTests(unittest.TestCase):
         self.assertTrue(any('platform::macos::service::tests::' in command
                             and '--no-run' not in command for command in commands))
 
+    def test_macos_ci_runs_preferences_lock_regression_on_both_architectures(self):
+        specification = importlib.util.spec_from_file_location('native_macos_lock_ci', build.ROOT/'scripts/run-ci.py')
+        native_ci = importlib.util.module_from_spec(specification)
+        specification.loader.exec_module(native_ci)
+        regression = 'platform::macos::native_proxy::tests::preferences_lock_retries_only_busy_within_budget'
+        for arch in ('x64', 'arm64'):
+            commands = []
+            with self.subTest(arch=arch), \
+                    patch.dict(os.environ, {'COR_CI_EXTENDED_TESTS': 'false',
+                                             'COR_CI_PROXY_BENCHMARK': 'false',
+                                             'COR_CI_DESKTOP_UI_TESTS': 'false',
+                                             'COR_CI_UPDATE_TESTS': 'false'}), \
+                    patch.object(sys, 'argv', ['run-ci.py', '--system', 'macos', '--arch', arch]), \
+                    patch.object(native_ci, 'host_system', return_value='macos'), \
+                    patch.object(native_ci, 'host_arch', return_value=arch), \
+                    patch.object(local_cache, 'workspace_sources'), \
+                    patch.object(local_cache, 'compiler_cache_checkpoint'), \
+                    patch.object(native_ci, 'run', side_effect=lambda command, **kwargs: commands.append(command)), \
+                    patch.object(native_ci, 'cargo_messages', side_effect=RuntimeError('source checks completed')):
+                with self.assertRaisesRegex(RuntimeError, 'source checks completed'):
+                    native_ci.main()
+            self.assertTrue(any(regression in command and '--exact' in command for command in commands))
+
     def test_update_changes_run_shared_schedule_config_cli_and_gui_regressions(self):
         specification = importlib.util.spec_from_file_location('native_update_ci', build.ROOT/'scripts/run-ci.py')
         native_ci = importlib.util.module_from_spec(specification)

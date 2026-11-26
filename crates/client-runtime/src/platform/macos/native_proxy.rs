@@ -6,6 +6,9 @@ use crate::platform::{ProxyState, ProxyValue};
 use anyhow::{Result, bail, ensure};
 use serde_json::Value;
 use std::ptr;
+use std::time::{Duration, Instant};
+
+const SC_STATUS_PREFS_BUSY: i32 = 3002;
 
 #[link(name = "SystemConfiguration", kind = "framework")]
 // SAFETY: SystemConfiguration uses opaque CF pointers, u8 Boolean results and
@@ -35,6 +38,22 @@ fn sc_check(ok: u8, action: &str) -> Result<()> {
         // SAFETY: SCError reads this thread's last SystemConfiguration error.
         unsafe { SCError() }
     );
+    Ok(())
+}
+fn wait_for_preferences_lock(
+    timeout: Duration,
+    mut attempt: impl FnMut() -> std::result::Result<(), i32>,
+) -> Result<()> {
+    let deadline = Instant::now() + timeout;
+    while let Err(status) = attempt() {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if status != SC_STATUS_PREFS_BUSY || remaining.is_zero() {
+            bail!(
+                "锁定网络设置（其他程序占用时请重试）失败（macOS SystemConfiguration {status}），请检查授权与网络服务"
+            );
+        }
+        std::thread::sleep(remaining.min(Duration::from_millis(50)));
+    }
     Ok(())
 }
 pub fn read() -> Result<ProxyState> {
@@ -98,12 +117,17 @@ fn edit_entity(
         "网络设置必须通过已授权的网络助手修改"
     );
     let prefs = preferences()?;
-    sc_check(
-        // SAFETY: The locally owned session is not shared with another thread;
-        // nonblocking lock failure returns before entering the edit closure.
-        unsafe { SCPreferencesLock(prefs.0, 0) },
-        "锁定网络设置（其他程序占用时请重试）",
-    )?;
+    wait_for_preferences_lock(Duration::from_secs(2), || {
+        // SAFETY: The locally owned session stays live on this thread. A
+        // failed nonblocking call leaves it unlocked; SCError is read immediately.
+        unsafe {
+            if SCPreferencesLock(prefs.0, 0) != 0 {
+                Ok(())
+            } else {
+                Err(SCError())
+            }
+        }
+    })?;
     let result = (|| {
         let current = read_entity_from(prefs.0, entity)?;
         let state = patch(&current)?;
@@ -163,4 +187,49 @@ fn edit_entity(
     // error exits. If Rust unwinds earlier, Owned releases the session instead.
     unsafe { SCPreferencesUnlock(prefs.0) };
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preferences_lock_retries_only_busy_within_budget() {
+        let mut attempts = 0;
+        wait_for_preferences_lock(Duration::from_secs(2), || {
+            attempts += 1;
+            if attempts == 1 {
+                Err(SC_STATUS_PREFS_BUSY)
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap();
+        assert_eq!(attempts, 2);
+
+        let started = Instant::now();
+        let error =
+            wait_for_preferences_lock(Duration::from_millis(100), || Err(SC_STATUS_PREFS_BUSY))
+                .unwrap_err();
+        assert!(started.elapsed() >= Duration::from_millis(100));
+        assert!(error.to_string().contains("SystemConfiguration 3002"));
+
+        for (status, timeout) in [
+            (SC_STATUS_PREFS_BUSY, Duration::ZERO),
+            (1003, Duration::from_secs(2)),
+        ] {
+            let mut attempts = 0;
+            let result = wait_for_preferences_lock(timeout, || {
+                attempts += 1;
+                Err(status)
+            });
+            assert_eq!(attempts, 1);
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains(&format!("SystemConfiguration {status}"))
+            );
+        }
+    }
 }
