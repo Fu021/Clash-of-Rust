@@ -20,7 +20,7 @@ pub use profile::Profile;
 
 pub const SUBSCRIPTION_RULES: [&str; 5] = [
     "GEOSITE,category-ads-all,REJECT",
-    "GEOSITE,private,DIRECT",
+    "GEOSITE,Private,DIRECT",
     "GEOIP,Private,DIRECT,no-resolve",
     "GEOSITE,CN,DIRECT",
     "GEOIP,CN,DIRECT,no-resolve",
