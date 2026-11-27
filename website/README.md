@@ -71,6 +71,8 @@ python3 -B website/export_preview.py
 
 [Cloudflare Workers 网站](https://clash-of-rust.fu021.shop/)从仓库构建。仓库根目录执行 `python3 -B website/build.py`，再运行 `npx wrangler deploy`。现有显式传入 Worker 名称、静态目录和兼容日期的命令也使用根目录的 `wrangler.toml`，由首次迁移创建 SQLite Durable Object。推送来源分支可能触发现有自动部署，部署后可查询 `/api/visitors` 检查计数接口。
 
+根目录的 `wrangler.toml` 用 `workers_dev = false` 和 `preview_urls = false` 在每次部署时关闭 Worker 自带的生产域名、版本 URL 和 `workers.dev` 预览域名。正式站点由 Cloudflare 中单独设置的自定义域名绑定提供。[Wrangler 配置说明](https://developers.cloudflare.com/workers/wrangler/configuration/)
+
 为避免无关客户端提交触发网站构建，在 Workers 项目的 **Settings → Build → Build watch paths** 配置 Include paths，加入 `website/*`、`wrangler.toml`、`resources/icons/wordmark-light.svg`、`resources/icons/wordmark-dark.svg`，Exclude paths 留空。这覆盖网站源码、构建脚本、部署配置和共享字标。该配置在 Cloudflare 账户中保存；保存后分别用网站输入变化和无关文件变化验证。按 [Cloudflare 官方说明](https://developers.cloudflare.com/workers/ci-cd/builds/build-watch-paths/)，空 push、至少 20 个提交或至少 3000 个文件变化仍会直接构建。
 
 构建复制 `_headers`、`_redirects`、`robots.txt` 和 `sitemap.xml`，canonical 与双语 alternate 均使用正式域名。旧 `/features` 跳至中文指南，`/zh/*` 跳至对应中文根路径，`/download` 继续有效。间距样式转换为外部规则以兼容 CSP；搜索引擎收录不作保证。
