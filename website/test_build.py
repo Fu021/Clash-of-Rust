@@ -204,7 +204,12 @@ class SiteTests(unittest.TestCase):
             self.assertIn('<meta property="og:site_name" content="Clash of Rust">', source)
             schema = re.findall(r'<script type="application/ld\+json">(.*?)</script>', source)
             if page.stem == "index":
-                self.assertIn("<h1>Clash of Rust</h1>", source)
+                heading, lead = {
+                    "en": ("Give every connection<br>a clear path.", "Clash of Rust is a native mihomo client."),
+                    "zh": ("每一条连接，<br>都有清晰的去向。", "Clash of Rust 是一个原生的 mihomo 客户端。"),
+                }[lang]
+                self.assertIn(f"<h1>{heading}</h1>", source)
+                self.assertIn(f'<p class="lead">{lead}', source)
                 self.assertEqual(list(map(json.loads, schema)), [{
                     "@context": "https://schema.org", "@type": "WebSite",
                     "name": "Clash of Rust", "url": build.SITE_URL + "/",
