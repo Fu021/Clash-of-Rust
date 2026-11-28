@@ -324,4 +324,28 @@ rules: [MATCH,DIRECT]
         assert!(build_page("proxies: []", "", &search, false, || false).is_err());
         assert!(build_page(&raw, "", &search, false, || true).is_err());
     }
+
+    #[test]
+    fn pages_near_limit_scalar_and_masks_following_credentials() {
+        let long_value = "a".repeat(super::super::PROFILE_LIMIT - 256);
+        let raw = format!("label: {long_value}\npassword: private-test-value\n");
+        for view in [View::Original, View::Runtime] {
+            let secret = "private-test-value";
+            let first = build_page(
+                &raw,
+                secret,
+                &request(view, Position::From(0)),
+                true,
+                || false,
+            )
+            .unwrap();
+            assert_eq!(first.end, PAGE_BYTES);
+            assert_eq!(first.text, raw[..PAGE_BYTES]);
+            let mut last_request = request(view, Position::Line(2));
+            last_request.revision = Some(first.revision);
+            let last = build_page(&raw, secret, &last_request, true, || false).unwrap();
+            assert_eq!(last.text, "password: \"[redacted]\"\n");
+            assert_eq!(last.end, last.total);
+        }
+    }
 }

@@ -73,6 +73,12 @@ fn main() {
         if args.path == "agent guide" {
             return agent_guide::print(&args);
         }
+        #[cfg(all(target_os = "linux", target_env = "gnu"))]
+        if args.path == "run" {
+            // SAFETY: parsing the arguments did not start threads. Runtime
+            // construction and backend initialization both occur below.
+            unsafe { clash_client_runtime::platform::memory::initialize_owner_allocator() };
+        }
         users::prepare(&args)?;
         #[cfg(windows)]
         if let Err(error) = clash_client_runtime::platform::notification::prepare_process() {

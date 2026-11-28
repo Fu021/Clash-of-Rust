@@ -41,6 +41,11 @@ pub(crate) fn run() -> anyhow::Result<()> {
     if update::helper_main() {
         return Ok(());
     }
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    // SAFETY: no GUI library or worker has started; helper modes have returned.
+    unsafe {
+        platform::memory::initialize_owner_allocator();
+    }
     #[cfg(target_os = "linux")]
     // This is the first initialization, before threads or GUI/DBus libraries.
     unsafe {

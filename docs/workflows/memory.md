@@ -10,6 +10,8 @@ loop 的第一重点是**关闭 GUI 或退出 TUI 后的驻留内存**。分别�
 
 两类优化都保留原输入、采样时长、全部进程及失败证据，分别报告 RSS/PSS/USS、匿名与堆私有页的峰值和末次值。关闭后未回落须注明仍存活的进程及观测差值；有实际证据再优化，短时单轮差值不能证明长期无泄漏，也不以停用后台、内核或代理能力降低指标。
 
+Linux glibc 上，GUI 宿主和 `cor run` 在创建运行时线程前将大块分配阈值固定在 128 KiB（glibc 动态策略的初始值）。这防止 YAML 超长标量的临时缓冲抬高动态阈值后，多份空闲页分别留在后台线程的分配区。若启动环境已显式设置 mmap 阈值、trim 阈值、mmap 数量上限或 top padding，则保留用户策略。独立渲染器、普通 CLI 命令、Mihomo 与其他平台不修改分配器策略。参数语义见 [glibc 手册](https://sourceware.org/glibc/manual/latest/html_node/Malloc-Tunable-Parameters.html)。
+
 ## Memory Benchmark
 
 手动选择 `ref`（分支、标签或提交），默认测当前所选分支：

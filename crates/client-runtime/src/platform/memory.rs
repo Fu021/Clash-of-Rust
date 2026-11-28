@@ -1,8 +1,46 @@
-//! Return unused allocator pages after desktop initialization or window destruction.
-//!
-//! This is a best-effort hint, not a working-set limit. Live allocations remain
-//! valid, and normal allocation continues when the window is opened again.
+//! Configure the desktop backend allocator and release unused pages after UI work.
 
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+fn has_malloc_policy(legacy: bool, tunables: &str) -> bool {
+    legacy
+        || tunables
+            .split(':')
+            .filter_map(|entry| entry.split_once('='))
+            .any(|(key, _)| {
+                matches!(
+                    key,
+                    "glibc.malloc.mmap_threshold"
+                        | "glibc.malloc.trim_threshold"
+                        | "glibc.malloc.mmap_max"
+                        | "glibc.malloc.top_pad"
+                )
+            })
+}
+
+/// Configure the owner's allocator before GUI libraries or the async runtime start.
+///
+/// # Safety
+/// Must run at single-threaded process startup, before libraries or background
+/// workers can allocate concurrently. Do not call from another thread or a signal handler.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+pub unsafe fn initialize_owner_allocator() {
+    let legacy = [
+        "MALLOC_MMAP_THRESHOLD_",
+        "MALLOC_TRIM_THRESHOLD_",
+        "MALLOC_MMAP_MAX_",
+        "MALLOC_TOP_PAD_",
+    ]
+    .into_iter()
+    .any(|key| std::env::var_os(key).is_some());
+    let tunables = std::env::var_os("GLIBC_TUNABLES").unwrap_or_default();
+    if !has_malloc_policy(legacy, &tunables.to_string_lossy()) {
+        // SAFETY: the owner calls this before starting threads. The threshold
+        // is a valid c_int in bytes and mallopt does not borrow program memory.
+        let _ = unsafe { libc::mallopt(libc::M_MMAP_THRESHOLD, 128 * 1024) };
+    }
+}
+
+/// Best-effort reclamation of free pages; live allocations and subsequent allocations remain valid.
 pub fn release_unused_heap() {
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
     // SAFETY: glibc's thread-safe trim only releases completely free pages.
@@ -51,6 +89,25 @@ pub fn release_unused_heap() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    #[test]
+    fn preserves_explicit_large_allocation_policies() {
+        assert!(has_malloc_policy(true, ""));
+        for entry in [
+            "glibc.malloc.mmap_threshold=262144",
+            "glibc.malloc.trim_threshold=1048576",
+            "glibc.malloc.mmap_max=0",
+            "glibc.malloc.top_pad=65536",
+        ] {
+            assert!(has_malloc_policy(
+                false,
+                &format!("glibc.malloc.arena_max=2:{entry}")
+            ));
+        }
+        assert!(!has_malloc_policy(false, ""));
+        assert!(!has_malloc_policy(false, "glibc.malloc.arena_max=2"));
+    }
 
     #[test]
     fn reclaim_keeps_live_allocations_valid_and_allows_further_allocation() {
