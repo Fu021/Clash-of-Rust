@@ -619,7 +619,7 @@ jobs:
                   '\nlegacy_prefix=' + identity['legacy_prefix'] + '\npaths<<CACHE_PATHS\n' +
                   '\n'.join(identity['paths']) + '\nCACHE_PATHS\n')
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
-        timeout-minutes: ${{ matrix.system == 'macos' && matrix.arch == 'x64' && 12 || 5 }}
+        timeout-minutes: ${{ matrix.system == 'macos' && matrix.arch == 'x64' && 12 || matrix.system == 'windows' && matrix.arch == 'x64' && 8 || 5 }}
         continue-on-error: true
         id: rust_github
         with:

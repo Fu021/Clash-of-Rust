@@ -36,6 +36,8 @@
 
 `70bd5c55` 的 [CI 45843335474](https://github.com/Fu021/Clash-of-Rust/actions/runs/45843335474) 13 项通过。macOS Intel 将 Rust 缓存保存时限增至 12 分钟，并用新键避开无法预留的旧键。该目标上传完整的 2.30 GiB，新键已在缓存清单中；其余八个 Rust 目标报告 `Cache up-to-date.`。Android 三个 Go 目标、Maven 和 Linux 双架构构建缓存均命中。预算作业移除旧 Intel 键，保留 19 条、19.26 GiB，均属 `main`。
 
+Windows x64 在 [CI 46154880045](https://github.com/Fu021/Clash-of-Rust/actions/runs/46154880045) 的 Rust 后置步骤达到 5 分钟时限。其后 [CI 46161554685](https://github.com/Fu021/Clash-of-Rust/actions/runs/46161554685) 用约 2 分 30 秒保存，[CI 46165265219](https://github.com/Fu021/Clash-of-Rust/actions/runs/46165265219) 用约 4 分 12 秒上传 2.86 GiB。因保存耗时波动，Windows x64 的步骤时限调至 8 分钟。
+
 `a87998f8` 的 [CI 46131889672](https://github.com/Fu021/Clash-of-Rust/actions/runs/46131889672) 13 项通过。九份 Rust 新缓存写入 17.67 GiB。Go、Maven 和两套 Linux 编译镜像命中。预算作业移除 8 条旧 Rust 缓存，收尾清单保留 `main` 的 14 条、19.26 GiB，其中没有本轮恢复过的 Maven 键。预算作业的删除列表没有该键，服务端未提供消失原因。按约 19.5 GiB 常驻和 17.7 GiB 一轮写入估算，两代重叠约 37.2 GiB。38 GB 仓库上限留出换代空间，预算作业仍按 30 GiB 目标收尾。
 
 `a49947c5` 的 [CI 46134443632](https://github.com/Fu021/Clash-of-Rust/actions/runs/46134443632) 13 项通过。八份 Rust 新缓存写入，Windows ARM64 精确命中并复用；三份 Go 与两份 Linux 编译镜像命中，Maven 重建并保留。预算作业将 36.34 GiB 收至 19.48 GiB，移除 8 条旧项；最终 15 条均属 `main`。本轮未发现缓存保存失败。
