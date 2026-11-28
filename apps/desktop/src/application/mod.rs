@@ -395,7 +395,8 @@ enum Message {
     UpdateDownloaded(u64, DownloadResult),
     UpdateHandoff(Result<update::InstallSession, String>),
     OpenRelease,
-    ReleaseOpened(Result<(), String>),
+    OpenGuide,
+    ExternalPageOpened(&'static str, Result<(), String>),
     Tick,
     HostRoutes(u64, serde_json::Value),
     #[cfg(target_os = "macos")]
@@ -1510,11 +1511,23 @@ impl App {
                     Err(reason) => self.fail_update(reason),
                 }
             }
-            Message::OpenRelease => {
-                let url = self.updates.available.as_ref().map_or_else(
-                    || update::RELEASES_URL.to_owned(),
-                    |update| update.url.clone(),
-                );
+            Message::OpenGuide | Message::OpenRelease => {
+                let (url, failure) = if matches!(message, Message::OpenGuide) {
+                    (
+                        clash_client_core::support::gui_guide_url(self.presentation_language)
+                            .to_owned(),
+                        self.presentation_language
+                            .text("无法打开官网使用指南", "Could not open the user guide"),
+                    )
+                } else {
+                    (
+                        self.updates.available.as_ref().map_or_else(
+                            || update::RELEASES_URL.to_owned(),
+                            |update| update.url.clone(),
+                        ),
+                        "无法打开 Release 页面",
+                    )
+                };
                 return Task::perform(
                     async move {
                         match tokio::task::spawn_blocking(move || platform::open_url(&url)).await {
@@ -1522,12 +1535,12 @@ impl App {
                             Err(error) => Err(error.to_string()),
                         }
                     },
-                    Message::ReleaseOpened,
+                    move |result| Message::ExternalPageOpened(failure, result),
                 );
             }
-            Message::ReleaseOpened(result) => {
+            Message::ExternalPageOpened(failure, result) => {
                 if let Err(error) = result {
-                    self.show_notice(format!("无法打开 Release 页面：{error}"), true);
+                    self.show_notice(format!("{failure}：{error}"), true);
                 }
             }
             Message::Navigate(page) => {

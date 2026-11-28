@@ -6,6 +6,23 @@ import { AndroidData, AndroidActions, AndroidIntent } from "state.slint";
 import { MText, MSmall, MHeading, MCard, MButton, MRow, MDivider, MSwitch, MField, MSelect, MScroll, MProgress } from "../shared/controls.slint";
 import { AppearanceSettings, NetworkToggles, ScheduleSettings, CurrentVersion, GeoSettingsContents } from "../shared/settings.slint";
 
+component AndroidHelp inherits VerticalLayout {
+    alignment: start; spacing: 10px;
+    MSmall { text: @tr("帮助"); font-weight: 600; }
+    MCard {
+        vertical-padding: 4px;
+        HorizontalLayout { spacing: MobileTypography.gap; cross-axis-alignment: center;
+            MText { text: @tr("官网使用指南"); min-width: 0px; wrap: word-wrap; }
+            label := MSmall { visible: false; text: @tr("在浏览器打开"); font-size: MobileTypography.font-size(13); }
+            MButton {
+                geometry-key: "settings-open-guide"; text: label.text; compact: true;
+                width: max(88px, label.preferred-width + 24px); horizontal-stretch: 0;
+                clicked => { MobileActions.request(MobileIntent.open-guide, "", ""); }
+            }
+        }
+    }
+}
+
 component AndroidLanguage inherits VerticalLayout {
     alignment: start; spacing: 10px;
     MSmall { text: @tr("语言/language"); font-weight: 600; }
@@ -83,15 +100,18 @@ export component AndroidSettings inherits PageSurface {
         changed content-height => { MobileView.settings-content-height = self.content-height; }
         changed height => { MobileView.settings-viewport-height = self.height; }
         init => { MobileView.settings-content-height = self.content-height; MobileView.settings-viewport-height = self.height; }
-        if root.width < 760px: VerticalLayout { alignment: start; spacing: 20px; padding-bottom: 20px;
-            AndroidLanguage { } AndroidConnection { } AndroidNetwork { } AppearanceSettings { custom-font-size: false; } AndroidUpdates { } ScheduleSettings { }
-        }
-        if root.width >= 760px: HorizontalLayout { spacing: 20px; width: root.width;
-            VerticalLayout { width: (root.width - 20px) / 2; horizontal-stretch: 0; alignment: start; spacing: 20px;
-                AndroidLanguage { } AndroidConnection { } AndroidNetwork { }
+        VerticalLayout { alignment: start; spacing: 20px;
+            AndroidHelp { }
+            if root.width < 760px: VerticalLayout { alignment: start; spacing: 20px; padding-bottom: 20px;
+                AndroidLanguage { } AndroidConnection { } AndroidNetwork { } AppearanceSettings { custom-font-size: false; } AndroidUpdates { } ScheduleSettings { }
             }
-            VerticalLayout { width: (root.width - 20px) / 2; horizontal-stretch: 0; alignment: start; spacing: 20px;
-                AppearanceSettings { custom-font-size: false; } AndroidUpdates { } ScheduleSettings { }
+            if root.width >= 760px: HorizontalLayout { spacing: 20px; width: root.width;
+                VerticalLayout { width: (root.width - 20px) / 2; horizontal-stretch: 0; alignment: start; spacing: 20px;
+                    AndroidLanguage { } AndroidConnection { } AndroidNetwork { }
+                }
+                VerticalLayout { width: (root.width - 20px) / 2; horizontal-stretch: 0; alignment: start; spacing: 20px;
+                    AppearanceSettings { custom-font-size: false; } AndroidUpdates { } ScheduleSettings { }
+                }
             }
         }
     }

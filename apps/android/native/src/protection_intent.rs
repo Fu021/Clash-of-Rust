@@ -79,6 +79,7 @@ fn allowed(intent: MobileIntent, value: &str) -> bool {
             | MobileIntent::SystemNotification
             | MobileIntent::CancelUpdate
             | MobileIntent::OpenRelease
+            | MobileIntent::OpenGuide
     ) || (intent == MobileIntent::ClaudeProtection && value == "false")
         || (intent == MobileIntent::ApplicationPolicy
             && matches!(

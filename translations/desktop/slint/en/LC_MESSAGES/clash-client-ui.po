@@ -394,6 +394,15 @@ msgstr "Close window"
 msgid "常规"
 msgstr "General"
 
+msgid "帮助"
+msgstr "Help"
+
+msgid "官网使用指南"
+msgstr "User guide"
+
+msgid "在浏览器打开"
+msgstr "Open in browser"
+
 msgid "网络"
 msgstr "Network"
 

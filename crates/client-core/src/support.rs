@@ -12,6 +12,13 @@ const LOG_LIMIT: u64 = 64 * 1024;
 pub const BUG_REPORT_URL: &str =
     "https://github.com/Fu021/Clash-of-Rust/issues/new?template=bug-report.yml";
 
+pub fn gui_guide_url(language: crate::config::Language) -> &'static str {
+    language.text(
+        "https://clash-of-rust.fu021.shop/guide",
+        "https://clash-of-rust.fu021.shop/en/guide",
+    )
+}
+
 pub fn timestamp() -> String {
     chrono::Utc::now().to_rfc3339()
 }

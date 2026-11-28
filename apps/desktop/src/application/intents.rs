@@ -75,6 +75,7 @@ fn allowed_during_protection(intent: Intent, value: &str) -> bool {
             | Intent::Quit
             | Intent::CancelUpdate
             | Intent::OpenRelease
+            | Intent::OpenGuide
             | Intent::OverviewRefresh
             | Intent::OverviewPrivacy
     ) || (intent == Intent::ClaudeProtection && value == "false")
@@ -350,6 +351,7 @@ impl App {
             Intent::InstallUpdate => Message::InstallUpdate,
             Intent::CancelUpdate => Message::CancelUpdateDownload,
             Intent::OpenRelease => Message::OpenRelease,
+            Intent::OpenGuide => Message::OpenGuide,
             Intent::ReportIssue => Message::ReportIssue(a.into()),
             Intent::Copy => Message::Copy(a.into()),
             Intent::Quit => return self.request_exit(),

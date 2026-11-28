@@ -39,7 +39,7 @@ export component SettingsPage inherits PageSurface {
         : root.section-offset >= network-section.y ? 1 : 0;
     public function go-to-section(index: int) {
         UiData.scroll-settings = -clamp(
-            index == 0 ? general-section.y : index == 1 ? network-section.y : index == 2 ? appearance-section.y : index == 3 ? update-section.y : schedule-section.y,
+            index == 0 ? 0px : index == 1 ? network-section.y : index == 2 ? appearance-section.y : index == 3 ? update-section.y : schedule-section.y,
             0px, max(0px, settings-scroll.content-height - settings-scroll.visible-height));
     }
     changed navigation-request => {
@@ -59,7 +59,17 @@ export component SettingsPage inherits PageSurface {
             VerticalLayout {
                 alignment: start;
                 padding-right: Theme.content-gap; padding-bottom: Theme.card-padding; spacing: Theme.section-gap;
-                general-section := SettingsSection {
+                SettingsSection {
+                    title: @tr("帮助");
+                    ListPanel {
+                        FormRow { title: @tr("官网使用指南");
+                            ActionButton { geometry-key: "settings-open-guide"; text: @tr("在浏览器打开"); compact: true; enabled: !UiData.exiting;
+                                clicked => { UiActions.dispatch(Intent.open-guide, "", ""); }
+                            }
+                        }
+                    }
+                }
+                SettingsSection {
                     title: @tr("常规");
                     ListPanel {
                         FormRow { title: @tr("语言/language");

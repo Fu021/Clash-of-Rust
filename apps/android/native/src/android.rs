@@ -3700,10 +3700,15 @@ async fn handle(state: &mut State, request: Request) -> Result<()> {
                 .text("Fake-IP 排除项已保存", "Fake-IP exclusions saved")
                 .into();
         }
-        MobileIntent::OpenRelease => {
-            session.native.request(
-                json!({"op":"open-url","url":"https://github.com/Fu021/Clash-of-Rust/releases"}),
-            )?;
+        MobileIntent::OpenGuide | MobileIntent::OpenRelease => {
+            let url = if intent == MobileIntent::OpenGuide {
+                core::support::gui_guide_url(language)
+            } else {
+                "https://github.com/Fu021/Clash-of-Rust/releases"
+            };
+            session
+                .native
+                .request(json!({"op": "open-url", "url": url}))?;
         }
         MobileIntent::Ipv6 => settings_input::save_ipv6(session, a.parse()?, language)?,
         MobileIntent::DnsOverride | MobileIntent::Udp => {

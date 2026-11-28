@@ -340,6 +340,15 @@ msgstr "Cancel download"
 msgid "查看 Release"
 msgstr "View releases"
 
+msgid "帮助"
+msgstr "Help"
+
+msgid "官网使用指南"
+msgstr "User guide"
+
+msgid "在浏览器打开"
+msgstr "Open in browser"
+
 msgid "在浏览器查看版本与发布说明"
 msgstr "View releases and notes in your browser"
 
