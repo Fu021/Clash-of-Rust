@@ -5,15 +5,17 @@ import { GeometryTarget } from "../components/geometry.slint";
 import { UiData, UiActions, Intent } from "../state.slint";
 import { PageScroll, Label, Caption, Paragraph, Heading, Panel, ContentPanel, ActionButton, Field, Select, SettingRow, Divider } from "../components/controls.slint";
 import { CopyButton } from "../components/desktop-copy.slint";
+import { YamlDocument } from "../components/yaml-document.slint";
 export component AppDialog inherits Rectangle {
     property <length> action-width: max(88px, max(copy-measure.preferred-width, max(disconnect-measure.preferred-width, dismiss-measure.preferred-width)) + 28px);
     copy-measure := Label { visible: false; text: root.kind == 13 ? @tr("复制全文") : @tr("复制详情"); }
     disconnect-measure := Label { visible: false; text: @tr("关闭连接"); }
-    dismiss-measure := Label { visible: false; text: (UiData.modal != 0 ? UiData.modal-accept : root.last-accept) == "" ? @tr("关闭") : @tr("取消"); }
+    dismiss-measure := Label { visible: false; text: root.kind == 14 ? @tr("继续编辑") : (root.opened ? root.source-accept : root.last-accept) == "" ? @tr("关闭") : @tr("取消"); }
     in-out property <int> selected-accent: UiData.accent;
-    presence := Presence { open: UiData.modal != 0; }
+    presence := Presence { open: root.opened; }
     out property <bool> mounted: presence.mounted;
-    property <int> source-kind: UiData.modal;
+    property <int> source-kind: UiData.modal != 0 ? UiData.modal : YamlDocument.confirm-close ? 14 : 0;
+    property <bool> opened: root.source-kind != 0;
     property <int> kind;
     changed source-kind => {
         if self.source-kind != 0 {
@@ -22,29 +24,29 @@ export component AppDialog inherits Rectangle {
         }
     }
     // Keep the last heading during exit; business state may already be cleared.
-    property <string> source-title: UiData.modal-title;
-    property <string> source-description: UiData.modal-description;
-    property <string> source-accept: UiData.modal-accept;
+    property <string> source-title: root.source-kind == 14 ? YamlDocument.discard-title() : UiData.modal-title;
+    property <string> source-description: root.source-kind == 14 ? YamlDocument.discard-detail() : UiData.modal-description;
+    property <string> source-accept: root.source-kind == 14 ? @tr("放弃修改") : UiData.modal-accept;
     property <string> last-title;
     property <string> last-description;
     property <string> last-accept;
-    changed source-title => { if UiData.modal != 0 { self.last-title = self.source-title; } }
+    changed source-title => { if self.opened { self.last-title = self.source-title; } }
     changed source-description => {
-        if UiData.modal != 0 {
+        if self.opened {
             self.last-description = self.source-description;
         }
     }
-    changed source-accept => { if UiData.modal != 0 { self.last-accept = self.source-accept; } }
-    init => { self.kind = UiData.modal; self.last-title = self.source-title; self.last-description = self.source-description; self.last-accept = self.source-accept; }
+    changed source-accept => { if self.opened { self.last-accept = self.source-accept; } }
+    init => { self.kind = self.source-kind; self.last-title = self.source-title; self.last-description = self.source-description; self.last-accept = self.source-accept; }
     visible: presence.mounted;
     if presence.mounted: Rectangle {
         opacity: presence.progress;
-        property <bool> opened: UiData.modal != 0;
+        property <bool> opened: root.opened;
         changed opened => { if self.opened && root.kind != 10 { modal-focus.focus(); } }
         background: root.kind == 10 ? transparent : #00000065;
         if root.kind != 10: TouchArea { }
         init => { if root.kind != 10 { modal-focus.focus(); } }
-        modal-focus := FocusScope { enabled: UiData.modal != 0 && root.kind != 10; }
+        modal-focus := FocusScope { enabled: root.opened && root.kind != 10; }
         dialog := Panel {
             border-radius: root.kind == 10 ? 0px : 18px;
             drop-shadow-blur: 32px; drop-shadow-offset-y: 8px;
@@ -54,7 +56,7 @@ export component AppDialog inherits Rectangle {
             height: root.kind == 10 ? parent.height - 44px : min(parent.height - 48px, content.preferred-height);
             content := VerticalLayout {
                 padding: Theme.dialog-padding; spacing: Theme.dialog-gap;
-                Heading { text: UiData.modal != 0 ? UiData.modal-title : root.last-title; font-size: 20px * Theme.text-scale; }
+                Heading { text: root.opened ? root.source-title : root.last-title; font-size: 20px * Theme.text-scale; }
                 PageScroll {
                     content-key: root.kind + "/" + root.last-title + "/" + root.last-description;
                     content-y <=> UiData.scroll-dialog;
@@ -68,7 +70,7 @@ export component AppDialog inherits Rectangle {
                             if UiData.modal-flagged: Text { text: UiData.modal-flag; width: 24px; height: 24px; font-size: 20px; }
                             Label { text: UiData.modal-country; }
                         }
-                        if (UiData.modal != 0 ? UiData.modal-description : root.last-description) != "": Paragraph { text: UiData.modal != 0 ? UiData.modal-description : root.last-description; }
+                        if (root.opened ? root.source-description : root.last-description) != "": Paragraph { text: root.opened ? root.source-description : root.last-description; }
                         if root.kind == 2: VerticalLayout {
                             width: body.width - Theme.content-gap;
                             horizontal-stretch: 1;
@@ -177,15 +179,25 @@ export component AppDialog inherits Rectangle {
                         enabled: UiData.connection-selected-id != "" && UiData.connection-details.length > 0 && !UiData.working && !UiData.protected && !UiData.protection-pending;
                         clicked => { UiActions.dispatch(Intent.close-connection, UiData.connection-selected-id, ""); }
                     }
-                    ActionButton { geometry-key: "dialog-dismiss"; width: root.kind == 10 ? root.action-width : max(68px, dismiss-measure.preferred-width + 28px); modal-control: true; text: (UiData.modal != 0 ? UiData.modal-accept : root.last-accept) == "" ? @tr("关闭") : @tr("取消"); clicked => { UiActions.dispatch(Intent.cancel-confirm, "", ""); } }
-                    if (UiData.modal != 0 ? UiData.modal-accept : root.last-accept) != "": ActionButton { modal-control: true;
-                        text: UiData.modal != 0 ? UiData.modal-accept : root.last-accept; primary: !UiData.modal-danger; danger: UiData.modal-danger;
-                        enabled: UiData.modal-can-accept && (root.kind == 12 || !UiData.working) && !UiData.exiting;
-                        clicked => { if root.kind == 12 { UiActions.dispatch(Intent.accent-color, "" + root.selected-accent, ""); } else { UiActions.dispatch(Intent.confirm, "", ""); } }
+                    ActionButton { geometry-key: "dialog-dismiss"; width: root.kind == 10 ? root.action-width : max(68px, dismiss-measure.preferred-width + 28px); modal-control: true; text: dismiss-measure.text;
+                        clicked => {
+                            if root.kind == 14 { YamlDocument.continue-editing(); }
+                            else { UiActions.dispatch(Intent.cancel-confirm, "", ""); }
+                        }
+                    }
+                    if (root.opened ? root.source-accept : root.last-accept) != "": ActionButton { modal-control: true;
+                        geometry-key: root.kind == 14 ? "yaml-discard-confirm" : "button:" + self.text;
+                        text: root.opened ? root.source-accept : root.last-accept; primary: !self.danger; danger: root.kind == 14 || UiData.modal-danger;
+                        enabled: root.kind == 14 ? YamlDocument.confirm-close : UiData.modal-can-accept && (root.kind == 12 || !UiData.working) && !UiData.exiting;
+                        clicked => {
+                            if root.kind == 14 { YamlDocument.discard-and-leave(); }
+                            else if root.kind == 12 { UiActions.dispatch(Intent.accent-color, "" + root.selected-accent, ""); }
+                            else { UiActions.dispatch(Intent.confirm, "", ""); }
+                        }
                     }
                 }
             }
         }
-        if UiData.modal == 0: TouchArea { }
+        if !root.opened: TouchArea { }
     }
 }

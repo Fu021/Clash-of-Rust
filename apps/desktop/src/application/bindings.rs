@@ -764,6 +764,7 @@ impl DesktopHost {
                             .is_some_and(|(current, _)| *current == id)
                 });
                 let active = window.is_some();
+                let mut status = None;
                 let mut failure = result
                     .as_ref()
                     .err()
@@ -802,6 +803,10 @@ impl DesktopHost {
                             }
                         }
                     }
+                    status = result
+                        .as_ref()
+                        .ok()
+                        .and_then(|reply| reply.status_message(self.app.presentation_language));
                     window.send(HostPacket::Command(wire::WindowCommand::Yaml {
                         id,
                         result: result
@@ -811,6 +816,12 @@ impl DesktopHost {
                 }
                 if let Some(failure) = failure.filter(|failure| active || failure.critical()) {
                     self.app.show_yaml_failure(failure);
+                    self.sync();
+                } else if let Some(status) = status {
+                    let previous = self.app.notice_revision;
+                    self.app.show_notice(status.into(), false);
+                    let task = self.app.schedule_notice(previous, Task::none());
+                    self.spawn(task);
                     self.sync();
                 }
             }

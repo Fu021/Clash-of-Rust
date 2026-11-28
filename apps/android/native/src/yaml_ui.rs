@@ -1,4 +1,6 @@
-use super::{AndroidWindow, Session, Update, YamlDocument, YamlHighlight, fonts, language_ui};
+use super::{
+    AndroidWindow, MobileView, Session, Update, YamlDocument, YamlHighlight, fonts, language_ui,
+};
 use clash_mobile_runtime::core as yaml_core;
 use clash_mobile_runtime::core::config::{
     documents::{Action, Failure, Operation, Reply},
@@ -62,13 +64,29 @@ impl Outcome {
         if !*cancel.borrow() {
             let pending = cancel.clone();
             let _ = weak.upgrade_in_event_loop(move |ui| {
-                if !*pending.borrow() {
-                    document::respond(
-                        &ui.global::<YamlDocument>(),
-                        id,
-                        result.map_err(|error| format!("{error:#}")),
-                        language_ui::current(&ui),
-                    );
+                let data = ui.global::<YamlDocument>();
+                if *pending.borrow() || id != data.get_request_id() || data.get_mode() == 0 {
+                    return;
+                }
+                let language = language_ui::current(&ui);
+                let status = result
+                    .as_ref()
+                    .ok()
+                    .and_then(|reply| reply.status_message(language));
+                document::respond(
+                    &data,
+                    id,
+                    result.map_err(|error| format!("{error:#}")),
+                    language,
+                );
+                if let Some(status) = status {
+                    let view = ui.global::<MobileView>();
+                    if !view.get_notice_error() || view.get_notice().is_empty() {
+                        view.set_notice_error(false);
+                        view.set_notice_critical(false);
+                        view.set_notice_recover_network(false);
+                        ui.invoke_notify(status.into());
+                    }
                 }
             });
         }

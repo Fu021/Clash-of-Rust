@@ -48,10 +48,13 @@ export component AppWindow inherits Window {
     in-out property <bool> dark <=> UiData.dark;
     in-out property <int> page <=> UiData.page;
     changed page => { YamlDocument.close(); }
-    changed minimized => { if self.minimized { YamlDocument.close(); } }
     property <bool> document-protected: UiData.protected || UiData.protection-pending;
     changed document-protected => { YamlDocument.protected = self.document-protected; }
     init => { YamlDocument.protected = self.document-protected; }
+    function navigate(destination: int) {
+        if YamlDocument.mode == 0 { UiActions.dispatch(Intent.navigate, "" + destination, ""); }
+        else if destination != UiData.page { YamlDocument.request-destination(destination); }
+    }
     in-out property <length> window-min-width: 800px;
     in-out property <length> window-min-height: 450px;
     min-width: root.window-min-width;
@@ -102,6 +105,9 @@ export component AppWindow inherits Window {
             if root.error-active && event.text == Key.Escape {
                 UiActions.dispatch(Intent.dismiss-notice, "", ""); return accept;
             }
+            if YamlDocument.mode > 0 && UiData.modal == 0 && event.text == Key.Escape {
+                YamlDocument.back(); return accept;
+            }
             return reject;
         }
         key-pressed(event) => {
@@ -139,7 +145,7 @@ export component AppWindow inherits Window {
                 for route-id in root.sidebar-pages: VerticalLayout {
                     spacing: 4px;
                     if route-id == 6 && !root.compact-sidebar: Caption { text: @tr("工具"); height: 24px; font-size: 12px * Theme.text-scale; }
-                    NavigationItem { compact: root.compact-sidebar; text: root.titles[route-id]; icon: root.icons[route-id]; trailing: route-id == 3 ? UiData.connection-count : ""; selected: UiData.page == route-id; clicked => { UiActions.dispatch(Intent.navigate, "" + route-id, ""); } }
+                    NavigationItem { compact: root.compact-sidebar; text: root.titles[route-id]; icon: root.icons[route-id]; trailing: route-id == 3 ? UiData.connection-count : ""; selected: UiData.page == route-id; clicked => { root.navigate(route-id); } }
                 }
             }
         }
@@ -147,7 +153,7 @@ export component AppWindow inherits Window {
             x: 8px; y: parent.height - self.height - 14px; width: parent.width - 16px;
             height: self.preferred-height; spacing: 8px;
             Rectangle { height: 1px; background: Theme.line; }
-            NavigationItem { compact: root.compact-sidebar; text: root.titles[9]; icon: root.icons[9]; selected: UiData.page == 9; clicked => { UiActions.dispatch(Intent.navigate, "9", ""); } }
+            NavigationItem { compact: root.compact-sidebar; text: root.titles[9]; icon: root.icons[9]; selected: UiData.page == 9; clicked => { root.navigate(9); } }
             if !root.compact-sidebar: Caption { height: 22px; text: UiData.version; font-size: 12px * Theme.text-scale; }
         }
     }
@@ -188,7 +194,7 @@ export component AppWindow inherits Window {
                     if UiData.protection-health > 0: ProtectionBadge {
                         health: UiData.protection-health;
                         enabled: UiData.modal == 0 && !UiData.notice-modal;
-                        clicked => { UiActions.dispatch(Intent.navigate, "8", ""); }
+                        clicked => { root.navigate(8); }
                     }
                     if UiData.page == 4 && YamlDocument.mode == 0: ActionButton {
                         geometry-key: "rule-shortcuts-open";
@@ -202,7 +208,7 @@ export component AppWindow inherits Window {
             if UiData.protection-health == 3: ProtectionAlert {
                 health: UiData.protection-health; message: UiData.protection-message;
                 enabled: UiData.modal == 0 && !UiData.notice-modal;
-                clicked => { UiActions.dispatch(Intent.navigate, "8", ""); }
+                clicked => { root.navigate(8); }
             }
             if UiData.protected || UiData.protection-pending: ContentPanel {
                 horizontal-padding: 12px; vertical-padding: 8px;

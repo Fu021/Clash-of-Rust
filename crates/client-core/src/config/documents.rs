@@ -348,6 +348,22 @@ pub enum Reply {
     ExternalSaved { revision: String, closed: bool },
 }
 
+impl Reply {
+    pub fn status_message(&self, language: Language) -> Option<&'static str> {
+        match self {
+            Self::Valid => Some(language.text("校验通过", "Validation passed")),
+            Self::Saved(_) | Self::ExternalSaved { closed: true, .. } => {
+                Some(language.text("已应用", "Applied"))
+            }
+            Self::ExternalSaved { closed: false, .. } => Some(language.text(
+                "已应用，外部编辑仍打开",
+                "Applied. The external editing session is still open.",
+            )),
+            _ => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

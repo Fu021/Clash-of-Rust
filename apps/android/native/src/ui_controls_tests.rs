@@ -1,6 +1,6 @@
 use crate::test_ui::{
     AndroidData, AndroidWindow, MobileActions, MobileData, MobileIntent, MobileView, SelectOption,
-    UiGeometry,
+    UiGeometry, YamlDocument,
 };
 use slint::{
     ComponentHandle, LogicalPosition, Model, PhysicalSize, Rgb8Pixel,
@@ -95,26 +95,28 @@ impl AndroidControls {
     }
 
     fn render(&self) {
+        let size = self.adapter.size();
         self.advance(300);
         self.targets.borrow_mut().clear();
         let geometry = self.window.global::<UiGeometry>();
         geometry.set_revision(geometry.get_revision().wrapping_add(1));
         self.advance(0);
         self.window.window().request_redraw();
-        let mut pixels = vec![Rgb8Pixel::default(); (WIDTH * HEIGHT) as usize];
+        let mut pixels = vec![Rgb8Pixel::default(); (size.width * size.height) as usize];
         assert!(self.adapter.draw_if_needed(|renderer| {
-            renderer.render(&mut pixels, WIDTH as usize);
+            renderer.render(&mut pixels, size.width as usize);
         }));
     }
 
     fn click(&self, key: &str, popup: Option<&str>) {
+        let size = self.adapter.size();
         let targets = self.targets.borrow();
         let bounds = &targets[key];
         let (offset_x, offset_y) = popup.map_or((0., 0.), |key| {
             let bounds = &targets[key];
             (
-                bounds[0].clamp(0., (WIDTH as f32 - bounds[2]).max(0.)),
-                bounds[1].clamp(0., (HEIGHT as f32 - bounds[3]).max(0.)),
+                bounds[0].clamp(0., (size.width as f32 - bounds[2]).max(0.)),
+                bounds[1].clamp(0., (size.height as f32 - bounds[3]).max(0.)),
             )
         });
         let position = LogicalPosition::new(
@@ -122,7 +124,8 @@ impl AndroidControls {
             offset_y + bounds[1] + bounds[3] / 2.,
         );
         assert!(
-            (0. ..WIDTH as f32).contains(&position.x) && (0. ..HEIGHT as f32).contains(&position.y),
+            (0. ..size.width as f32).contains(&position.x)
+                && (0. ..size.height as f32).contains(&position.y),
             "{key} is outside the window: {position:?}"
         );
         drop(targets);
@@ -140,6 +143,42 @@ impl AndroidControls {
                 button: PointerEventButton::Left,
             });
         self.render();
+    }
+}
+
+#[test]
+fn android_yaml_override_uses_a_compact_button_and_confirms_discard() {
+    let controls = AndroidControls::new(2);
+    let document = controls.window.global::<YamlDocument>();
+    document.set_available(true);
+    for width in [WIDTH, 1_024] {
+        controls.adapter.set_size(PhysicalSize::new(width, HEIGHT));
+        controls.render();
+        {
+            let targets = controls.targets.borrow();
+            let search = &targets["profiles-search"];
+            let button = &targets["global-override"];
+            assert!(search[0] + search[2] <= button[0]);
+            assert!(button[2] < search[2]);
+            assert!(button[0] + button[2] <= width as f32);
+        }
+        controls.click("global-override", None);
+        assert_eq!(document.get_mode(), 1);
+        document.set_loaded(true);
+        document.set_text("# 草稿 🐱".into());
+        document.set_dirty(true);
+        controls.window.invoke_native_back();
+        controls.render();
+        assert!(document.get_confirm_close());
+        controls.click("mobile-modal-cancel", None);
+        assert!(!document.get_confirm_close());
+        assert_eq!(document.get_text(), "# 草稿 🐱");
+        controls.window.invoke_native_back();
+        controls.render();
+        controls.click("yaml-discard-confirm", None);
+        assert_eq!(document.get_mode(), 0);
+        assert!(document.get_text().is_empty());
+        assert_eq!(controls.window.get_current_page(), 2);
     }
 }
 

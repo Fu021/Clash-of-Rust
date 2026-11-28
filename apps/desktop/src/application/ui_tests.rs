@@ -2292,6 +2292,59 @@ fn pointer_keyboard_escape_and_modal_input_use_the_production_callbacks() {
     window.hide().unwrap();
 }
 
+#[test]
+fn yaml_draft_requires_confirmation_before_desktop_navigation() {
+    use clash_client_ui::YamlDocument;
+    use slint::platform::{Key, WindowEvent};
+
+    ui_testing::initialize(950, 700);
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    data.set_page(2);
+    let document = window.global::<YamlDocument>();
+    document.set_available(true);
+    let events = std::rc::Rc::new(RefCell::new(Vec::new()));
+    let recorded = events.clone();
+    window
+        .global::<UiActions>()
+        .on_dispatch(move |intent, destination, _| {
+            recorded.borrow_mut().push((intent, destination))
+        });
+    track_targets(&window);
+    window.show().unwrap();
+    motion_frame(&window, 300);
+    click_target(&window, "global-override");
+    assert_eq!(document.get_mode(), 1);
+    document.set_loaded(true);
+    document.set_text("prepend-rules: []".into());
+    document.set_dirty(true);
+
+    click_target(&window, "nav:规则");
+    motion_frame(&window, 300);
+    assert!(window.get_modal_mounted());
+    assert!(document.get_confirm_close());
+    assert!(events.borrow().is_empty());
+
+    window.window().dispatch_event(WindowEvent::KeyPressed {
+        text: Key::Escape.into(),
+    });
+    motion_frame(&window, 300);
+    assert!(!document.get_confirm_close());
+    assert_eq!(document.get_text(), "prepend-rules: []");
+    assert!(events.borrow().is_empty());
+
+    click_target(&window, "nav:规则");
+    motion_frame(&window, 300);
+    click_target(&window, "yaml-discard-confirm");
+    assert_eq!(document.get_mode(), 0);
+    assert!(document.get_text().is_empty());
+    assert_eq!(
+        events.borrow().as_slice(),
+        &[(Intent::Navigate, "4".into())]
+    );
+    window.hide().unwrap();
+}
+
 // Small fixtures used only by the interaction tests above. Visual previews
 // inject their own data into ui/preview.slint without compiling the desktop.
 pub(super) fn fixture(page: Page) -> App {

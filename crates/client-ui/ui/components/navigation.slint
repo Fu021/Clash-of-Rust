@@ -1,6 +1,6 @@
 import { Motion } from "motion.slint";
+import { ControlAccess } from "control-access.slint";
 import { Theme } from "../theme/palette.slint";
-import { UiData } from "../state.slint";
 import { Label, Caption } from "controls.slint";
 import { GeometryTarget } from "geometry.slint";
 
@@ -18,10 +18,11 @@ export component NavigationItem inherits Rectangle {
     border-width: 1px;
     border-color: root.keyboard-focus && key-scope.has-focus ? Theme.accent : transparent;
     property <bool> keyboard-focus;
+    property <bool> interactive: !ControlAccess.modal-blocked() && !ControlAccess.notice-blocked();
     background: root.selected ? Theme.inset : area.has-hover ? Theme.surface : transparent;
     accessible-role: button;
     accessible-label: root.text;
-    accessible-action-default => { if (UiData.modal == 0 || UiData.modal == 10) && !UiData.notice-modal { root.clicked(); } }
+    accessible-action-default => { if root.interactive { root.clicked(); } }
     animate background { duration: Motion.control; enabled: Motion.active; }
     Image { x: root.compact ? (parent.width - self.width) / 2 : 12px; y: (parent.height - self.height) / 2; width: 18px; height: 18px; source: root.icon; colorize: Theme.secondary; animate colorize { duration: Motion.control; enabled: Motion.active; } }
     if !root.compact: Label { x: 40px; y: 0px; width: parent.width - 48px - (root.trailing == "" ? 0px : trailing.preferred-width + 8px); height: parent.height; text: root.text; color: Theme.ink; font-weight: root.selected ? 600 : 400; }
@@ -31,7 +32,7 @@ export component NavigationItem inherits Rectangle {
         text: root.trailing;
     }
     key-scope := FocusScope {
-        enabled: (UiData.modal == 0 || UiData.modal == 10) && !UiData.notice-modal;
+        enabled: root.interactive;
         focus-gained(reason) => { root.keyboard-focus = reason == FocusReason.tab-navigation; }
         key-pressed(event) => {
             root.keyboard-focus = true;
@@ -39,5 +40,5 @@ export component NavigationItem inherits Rectangle {
             return reject;
         }
     }
-    area := TouchArea { mouse-cursor: pointer; clicked => { root.keyboard-focus = false; key-scope.focus(); root.clicked(); } }
+    area := TouchArea { enabled: root.interactive; mouse-cursor: pointer; clicked => { root.keyboard-focus = false; key-scope.focus(); root.clicked(); } }
 }

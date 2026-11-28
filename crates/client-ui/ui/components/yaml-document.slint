@@ -25,12 +25,11 @@ export global YamlDocument {
     in-out property <bool> busy;
     in-out property <bool> writing;
     in-out property <bool> confirm-close;
+    property <int> pending-destination: -1;
     in-out property <bool> loaded;
     in-out property <bool> applied;
     in-out property <bool> hide-credentials;
     in-out property <string> error;
-    in-out property <string> status;
-    out property <int> status-revision;
     in-out property <int> start;
     in-out property <int> end;
     in-out property <int> total;
@@ -59,15 +58,19 @@ export global YamlDocument {
     callback external();
     callback poll-external();
     callback valid-query(query: string) -> bool;
+    callback leave-destination(int);
 
-    public function report(status: int) {
-        self.status = status == 1 ? @tr("校验通过") : status == 2 ? @tr("已应用")
-            : status == 3 ? @tr("已应用，外部编辑仍打开") : "";
-        self.status-revision = self.status-revision + 1;
+    public pure function discard-title() -> string {
+        return @tr("放弃未应用的修改？");
+    }
+
+    public pure function discard-detail() -> string {
+        return self.external-open
+            ? @tr("离开后将丢弃本次修改，并删除外部编辑器的临时副本。")
+            : @tr("离开后将丢弃本次未应用的修改。");
     }
 
     public function oversized-edit() {
-        self.status = "";
         self.error = @tr("全局覆写不能超过 128 KiB");
     }
 
@@ -79,8 +82,9 @@ export global YamlDocument {
         self.text = ""; self.accepted-text = ""; self.profile = ""; self.revision = "";
         self.enabled = false; self.saved-enabled = false; self.dirty = false;
         self.busy = false; self.writing = false; self.loaded = false; self.applied = false; self.confirm-close = false;
+        self.pending-destination = -1;
         self.external-open = false; self.external-polling = false; self.external-poll-failed = false;
-        self.error = ""; self.status = "";
+        self.error = "";
         self.start = 0; self.end = 0; self.total = 0;
         self.first-line = 1; self.line-count = 1; self.line = 1; self.column = 1;
         self.anchor = -1; self.cursor = -1;
@@ -88,17 +92,33 @@ export global YamlDocument {
         self.find-from = 0; self.find-current = 0; self.find-total = -1;
     }
 
-    public function request-close() {
-        if self.writing { return; }
+    public function request-destination(destination: int) {
+        if self.writing || self.confirm-close { return; }
+        self.pending-destination = destination;
         if self.mode == 1 && (self.dirty || self.saved-enabled != self.enabled || self.external-open) {
             self.confirm-close = true;
         } else {
-            self.close();
+            self.discard-and-leave();
         }
     }
 
+    public function request-close() {
+        self.request-destination(-1);
+    }
+
+    public function continue-editing() {
+        self.pending-destination = -1;
+        self.confirm-close = false;
+    }
+
+    public function discard-and-leave() {
+        let destination = self.pending-destination;
+        self.close();
+        if destination != -1 { self.leave-destination(destination); }
+    }
+
     public function back() {
-        if self.confirm-close { self.confirm-close = false; }
+        if self.confirm-close { self.continue-editing(); }
         else if self.find-open { self.find-open = false; }
         else { self.request-close(); }
     }
@@ -196,6 +216,12 @@ export component YamlDocumentPanel inherits Rectangle {
     property <bool> editable: YamlDocument.editable && !YamlDocument.writing && !YamlDocument.external-open;
     property <bool> writable: YamlDocument.editable && !YamlDocument.writing;
     property <bool> discard <=> YamlDocument.confirm-close;
+    changed discard => {
+        if !root.discard && !root.compact && YamlDocument.mode > 0 {
+            if root.search-open { root.search-focus += 1; }
+            else { input.focus(); }
+        }
+    }
     property <bool> search-open: YamlDocument.find-open;
     property <string> search;
     property <int> search-focus;
@@ -282,12 +308,6 @@ export component YamlDocumentPanel inherits Rectangle {
             root.navigate(previous ? "find-previous" : "find", root.search);
         }
     }
-    property <int> status-revision: YamlDocument.status-revision;
-    changed status-revision => { status-timer.restart(); }
-    status-timer := Timer {
-        interval: 5s;
-        triggered => { self.stop(); YamlDocument.status = ""; }
-    }
     Timer {
         interval: 1500ms;
         running: YamlDocument.external-open && YamlDocument.editable && !YamlDocument.writing && !root.discard;
@@ -310,14 +330,6 @@ export component YamlDocumentPanel inherits Rectangle {
       }
       VerticalLayout {
         padding: root.compact ? Theme.content-gap : 0px; spacing: Theme.content-gap;
-        if root.discard: VerticalLayout {
-            Caption { text: YamlDocument.external-open ? @tr("放弃未应用的修改并删除外部编辑临时副本？") : @tr("放弃未应用的修改？"); wrap: word-wrap; }
-            HorizontalLayout {
-                spacing: 6px;
-                ActionButton { text: @tr("继续编辑"); compact: true; quiet: true; touch-height: root.touch-height; clicked => { root.discard = false; } }
-                ActionButton { text: @tr("放弃修改"); compact: true; danger: true; touch-height: root.touch-height; clicked => { YamlDocument.close(); } }
-            }
-        }
         if YamlDocument.mode >= 2: HorizontalLayout {
             spacing: 6px;
             ActionButton {
@@ -333,18 +345,10 @@ export component YamlDocumentPanel inherits Rectangle {
             text: @tr("保存后会自动同步。应用前请保存并关闭外部编辑器。");
             wrap: word-wrap;
         }
-        if YamlDocument.error != "" || YamlDocument.status != "" || YamlDocument.busy || YamlDocument.writing || (YamlDocument.mode == 1 && YamlDocument.protected): Rectangle {
-            height: feedback.preferred-height;
-            feedback := Caption {
-                width: parent.width;
-                text: YamlDocument.error != "" ? YamlDocument.error : YamlDocument.busy || YamlDocument.writing ? @tr("正在处理…") : YamlDocument.mode == 1 && YamlDocument.protected ? @tr("Claude 保护期间只读") : YamlDocument.status;
-                color: YamlDocument.error == "" ? Theme.secondary : Theme.danger;
-                wrap: word-wrap;
-            }
-            TouchArea {
-                enabled: YamlDocument.status != "" && YamlDocument.error == "" && !YamlDocument.busy && !YamlDocument.writing;
-                clicked => { YamlDocument.status = ""; }
-            }
+        if YamlDocument.error != "" || YamlDocument.busy || YamlDocument.writing || (YamlDocument.mode == 1 && YamlDocument.protected): Caption {
+            text: YamlDocument.error != "" ? YamlDocument.error : YamlDocument.busy || YamlDocument.writing ? @tr("正在处理…") : @tr("Claude 保护期间只读");
+            color: YamlDocument.error == "" ? Theme.secondary : Theme.danger;
+            wrap: word-wrap;
         }
         Panel {
           vertical-stretch: 1; min-height: 0px;
@@ -367,21 +371,21 @@ export component YamlDocumentPanel inherits Rectangle {
                     selected: YamlDocument.hide-credentials;
                     clicked => { YamlDocument.toggle-credentials(); }
                 }
-                if !root.discard: ActionButton {
+                ActionButton {
                     text: @tr("查找"); geometry-key: "yaml-find";
                     icon: @image-url("../icons/search.svg"); icon-only: true;
                     compact: true; quiet: true; selected: root.search-open; touch-height: root.touch-height;
                     enabled: YamlDocument.loaded;
                     clicked => { if root.search-open { YamlDocument.find-open = false; } else { root.open-find(); } }
                 }
-                if !root.discard && YamlDocument.mode == 1 && YamlDocument.external-editor: ActionButton {
+                if YamlDocument.mode == 1 && YamlDocument.external-editor: ActionButton {
                     text: @tr("外部编辑器"); geometry-key: "yaml-external-editor";
                     icon: @image-url("../icons/open-external.svg"); icon-only: true;
                     compact: true; quiet: true; touch-height: root.touch-height;
                     enabled: root.editable; selected: YamlDocument.external-open;
                     clicked => { YamlDocument.external(); }
                 }
-                if !root.discard: ActionButton {
+                ActionButton {
                     text: @tr("复制"); geometry-key: "yaml-copy";
                     icon: @image-url("../icons/copy.svg"); icon-only: true;
                     compact: true; quiet: true; touch-height: root.touch-height; focus-on-click: false;
@@ -466,7 +470,7 @@ export component YamlDocumentPanel inherits Rectangle {
                 }
             }
           }
-          if root.search-open && !root.discard: Panel {
+          if root.search-open: Panel {
               x: max(0px, parent.width - self.width - 6px); y: 6px;
               width: max(0px, min(396px, parent.width - 12px));
               height: find-bar.preferred-height + 12px;
@@ -504,7 +508,7 @@ export component YamlDocumentPanel inherits Rectangle {
           }
           }
         }
-        if YamlDocument.mode == 1 && YamlDocument.loaded && !root.discard: HorizontalLayout {
+        if YamlDocument.mode == 1 && YamlDocument.loaded: HorizontalLayout {
             spacing: Theme.content-gap; cross-axis-alignment: center;
             Toggle {
                 accessible-role: checkbox; accessible-label: @tr("全局覆写");

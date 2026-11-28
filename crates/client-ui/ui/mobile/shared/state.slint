@@ -2,6 +2,7 @@
 // Only domain row types are reused; mobile views never read desktop UiData.
 import { GroupItem, ProfileItem, ConnectionItem, RuleItem, LogItem, CategoryPair, ReportItem, DetailItem, FakeIpExclusionItem, OverviewItem } from "../../models.slint";
 import { ControlAccess } from "../../components/control-access.slint";
+import { YamlDocument } from "../../components/yaml-document.slint";
 
 export enum MobileIntent {
     navigate, connect, disconnect, restart-core, mode, overview-refresh, overview-privacy, query, node-sort, node-page, group-expansion, group-page, group-pagination, profile-page, profile-pagination, connection-page, rule-page, rule-text-mode, select-node, node-delay, group-delay, delay-all, system-notification,
@@ -151,7 +152,7 @@ export global MobileView {
     // 1 risks, 2 rule editor, 3 profile editor, 4 delete, 5 connection,
     // 14 Fake-IP, 15 rule actions, 16 IP result, 17 Android detection options.
     in-out property <int> detail;
-    out property <bool> modal: self.detail == 4 || self.detail == 8 || self.detail == 11 || self.detail == 12 || self.detail == 13;
+    out property <bool> modal: self.detail == 4 || self.detail == 8 || self.detail == 11 || self.detail == 12 || self.detail == 13 || YamlDocument.confirm-close;
     in-out property <string> selected-id;
     in-out property <int> connection-detail-request;
     in-out property <string> query;
@@ -216,9 +217,15 @@ export global MobileView {
     in-out property <length> settings-scroll-y;
     in-out property <length> settings-content-height;
     in-out property <length> settings-viewport-height;
+    callback leave-document <=> YamlDocument.leave-destination;
+    leave-document(destination) => { self.navigate(destination); }
     callback navigate(int);
     navigate(destination) => {
         if MobileData.profile-busy { return; }
+        if YamlDocument.mode > 0 {
+            if self.page != destination { YamlDocument.request-destination(destination); }
+            return;
+        }
         if self.draft-dirty {
             self.pending-page = destination; self.pending-detail = self.detail; self.detail = 12;
         } else {

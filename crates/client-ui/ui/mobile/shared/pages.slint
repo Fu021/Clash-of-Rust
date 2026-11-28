@@ -267,6 +267,18 @@ export component MobileProxies inherits PageSurface {
         }
     } }
 }
+component MobileOverrideButton inherits MButton {
+    text: override-label.text;
+    compact: true;
+    min-width: override-label.preferred-width + 28px;
+    preferred-width: self.min-width;
+    horizontal-stretch: 0;
+    override-label := MSmall {
+        text: @tr("全局覆写"); font-size: MobileTypography.font-size(14); visible: false;
+    }
+    clicked => { YamlDocument.open(1, ""); }
+}
+
 export component MobileSubscriptions inherits PageSurface {
     motion-revision: PageViews.profiles-list ? 1 : 0;
     motion-enabled: Motion.layout-active;
@@ -291,17 +303,16 @@ export component MobileSubscriptions inherits PageSurface {
             }
           }
         }
-        MField {
-            GeometryTarget { key: "profiles-search"; bounds: [parent.absolute-position.x, parent.absolute-position.y, parent.width, parent.height]; }
-            placeholder: @tr("搜索名称或来源"); text <=> MobileView.query;
-            edited(value) => { MobileActions.request(MobileIntent.query, "profiles", value); }
+        HorizontalLayout { cross-axis-alignment: center; spacing: MobileTypography.small-gap;
+            search := MField {
+                GeometryTarget { key: "profiles-search"; bounds: [search.absolute-position.x, search.absolute-position.y, search.width, search.height]; }
+                placeholder: @tr("搜索名称或来源"); text <=> MobileView.query;
+                edited(value) => { MobileActions.request(MobileIntent.query, "profiles", value); }
+            }
+            if YamlDocument.available: MobileOverrideButton { geometry-key: "global-override"; }
         }
         HorizontalLayout { cross-axis-alignment: center; spacing: MobileTypography.small-gap;
             MSmall { text: MobileData.profile-page; }
-            if YamlDocument.available: MButton {
-                text: @tr("全局覆写"); geometry-key: "global-override"; compact: true;
-                clicked => { YamlDocument.open(1, ""); }
-            }
             MButton { geometry-key: "profiles-pagination"; text: MobileData.profiles-paginated ? @tr("显示全部") : @tr("分页显示"); compact: true; quiet: true; width: max(100px, MobileTypography.font-size(13) * 7 + 20px); horizontal-stretch: 0;
                 clicked => { MobileActions.request(MobileIntent.profile-pagination, MobileData.profiles-paginated ? "false" : "true", ""); }
             }
@@ -667,7 +678,7 @@ export component MobileRules inherits PageSurface {
         if YamlDocument.available && MobileData.global-override-enabled: HorizontalLayout {
             spacing: 6px; cross-axis-alignment: center;
             MSmall { text: @tr("全局规则来自 merge.yaml，在生成运行配置时合并。"); wrap: word-wrap; }
-            MButton { text: @tr("全局覆写"); compact: true; clicked => { YamlDocument.open(1, ""); } }
+            MobileOverrideButton { geometry-key: "global-override"; }
         }
         Rectangle {
             clip: true;

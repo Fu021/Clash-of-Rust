@@ -13,9 +13,6 @@ msgstr "Subscription source"
 msgid "全局规则来自 merge.yaml，在生成运行配置时合并。"
 msgstr "Global rules from merge.yaml are merged into the runtime configuration."
 
-msgid "校验通过"
-msgstr "Validation passed"
-
 msgid "没有找到匹配内容"
 msgstr "No matches found"
 
@@ -34,11 +31,11 @@ msgstr "Apply and close"
 msgid "保存后会自动同步。应用前请保存并关闭外部编辑器。"
 msgstr "Saved changes sync automatically. Save and close the external editor before applying."
 
-msgid "已应用，外部编辑仍打开"
-msgstr "Applied. The external editing session is still open."
+msgid "离开后将丢弃本次修改，并删除外部编辑器的临时副本。"
+msgstr "Leaving discards your changes and deletes the external editor’s temporary copy."
 
-msgid "放弃未应用的修改并删除外部编辑临时副本？"
-msgstr "Discard unapplied changes and remove the external editor's temporary copy?"
+msgid "离开后将丢弃本次未应用的修改。"
+msgstr "Leaving discards your unapplied changes."
 
 msgid "原始 YAML"
 msgstr "Original YAML"
@@ -87,9 +84,6 @@ msgstr "Recognized credentials are hidden"
 
 msgid "校验"
 msgstr "Validate"
-
-msgid "已应用"
-msgstr "Applied"
 
 msgid "正在处理…"
 msgstr "Working…"

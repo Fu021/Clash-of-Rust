@@ -117,7 +117,6 @@ fn bind_yaml(window: &AppWindow, output: &mpsc::Sender<UiEvent>) {
             let document = window.global::<YamlDocument>();
             if document.get_editable() && !document.get_writing() && !document.get_external_open() {
                 document.set_error(Default::default());
-                document.set_status(Default::default());
                 document.set_writing(true);
                 send_yaml(
                     &window,
@@ -399,10 +398,20 @@ pub fn run() -> anyhow::Result<()> {
         });
     let weak = window.as_weak();
     let close = output.clone();
+    window.global::<UiActions>().on_close_window(move || {
+        if let Some(window) = weak.upgrade() {
+            send(&close, UiEvent::Close(view_state::capture(&window)));
+        }
+    });
+    let weak = window.as_weak();
     window.window().on_close_requested(move || {
         if let Some(window) = weak.upgrade() {
-            window.global::<YamlDocument>().invoke_close();
-            send(&close, UiEvent::Close(view_state::capture(&window)));
+            let document = window.global::<YamlDocument>();
+            if document.get_mode() != 0 {
+                document.invoke_request_destination(-2);
+            } else {
+                window.global::<UiActions>().invoke_close_window();
+            }
         }
         slint::CloseRequestResponse::KeepWindowShown
     });
@@ -519,6 +528,11 @@ pub fn run() -> anyhow::Result<()> {
                         {
                             Some(wire::Intent::FocusSearch)
                         } else if cfg!(target_os = "macos") && text.eq_ignore_ascii_case("q") {
+                            let document = window.global::<YamlDocument>();
+                            if document.get_mode() != 0 {
+                                document.invoke_request_destination(-3);
+                                return EventResult::PreventDefault;
+                            }
                             Some(wire::Intent::Quit)
                         } else {
                             None

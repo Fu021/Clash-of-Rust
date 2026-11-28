@@ -100,7 +100,6 @@ pub fn write(document: &YamlDocument<'_>, apply: bool) -> Result<Action> {
         document.set_external_polling(false);
     }
     document.set_error(Default::default());
-    document.set_status(Default::default());
     Ok(if external {
         Action::WriteExternal { change, apply }
     } else if apply {
@@ -140,7 +139,6 @@ pub fn show_error(document: &YamlDocument<'_>, error: &str, language: Language) 
         .map(|part| super::yaml_core::error_message::localize(part, language))
         .collect::<Vec<_>>()
         .join(": ");
-    document.set_status(Default::default());
     document.set_error(detail.into());
 }
 
@@ -165,7 +163,6 @@ pub fn respond(
     document.set_busy(false);
     document.set_writing(false);
     document.set_error(Default::default());
-    document.set_status(Default::default());
     match result {
         Ok(Reply::Override(saved)) => {
             document.set_revision(saved.revision.into());
@@ -199,12 +196,11 @@ pub fn respond(
             select(document, page.selected, page.selected.is_some());
             document.set_loaded(true);
         }
-        Ok(Reply::Valid) => document.invoke_report(1),
+        Ok(Reply::Valid) => {}
         Ok(Reply::Saved(revision)) => {
             document.set_revision(revision.into());
             document.set_saved_enabled(document.get_enabled());
             document.set_dirty(false);
-            document.invoke_report(2);
         }
         Ok(Reply::ExternalOpened) => document.set_external_open(true),
         Ok(Reply::ExternalDraft(text)) => {
@@ -226,8 +222,6 @@ pub fn respond(
             document.set_saved_enabled(document.get_enabled());
             if closed {
                 document.invoke_close();
-            } else {
-                document.invoke_report(3);
             }
         }
         Err(error) => {
@@ -271,7 +265,6 @@ pub fn edited(document: &YamlDocument<'_>) {
     document.set_accepted_text(text);
     document.set_dirty(true);
     document.set_error(Default::default());
-    document.invoke_report(0);
 }
 
 pub fn locate(document: &YamlDocument<'_>, offset: i32) {

@@ -11,6 +11,7 @@ import { RuleShortcutsDialog } from "../../components/rule-shortcuts.slint";
 import { GeometryTarget } from "../../components/geometry.slint";
 import { ReportText } from "../../components/report.slint";
 import { IpStatusText } from "../../components/ip-status.slint";
+import { YamlDocument } from "../../components/yaml-document.slint";
 
 component RulesShortcutButton inherits MButton {
     geometry-key: "rule-shortcuts-open";
@@ -136,6 +137,9 @@ export component MobileFrame inherits Rectangle {
             if event.text == Key.Escape && MobileView.rule-drag-id != "" {
                 MobileView.rule-drag-id = ""; MobileView.rule-drag-target = ""; return accept;
             }
+            if event.text == Key.Escape && YamlDocument.confirm-close {
+                YamlDocument.continue-editing(); return accept;
+            }
             if event.text == Key.Escape && !MobileView.modal {
                 if root.detail-page || root.standalone-detail { root.go-back(); }
                 else if MobileView.page == 6 && MobileView.network-open {
@@ -209,11 +213,11 @@ export component MobileFrame inherits Rectangle {
                     horizontal-stretch: 0; wrap: word-wrap;
                 }
                 Rectangle { horizontal-stretch: 1; }
-                if !root.stacked-header && !(root.narrow && MobileView.page == 4): HeaderStatus {
+                if !root.stacked-header && !(root.narrow && MobileView.page == 4 && !root.standalone-detail): HeaderStatus {
                     compact: root.usable-height < 600px;
-                    rules-shortcut: MobileView.page == 4 && !root.detail-page;
+                    rules-shortcut: MobileView.page == 4 && !root.detail-page && !root.standalone-detail;
                 }
-                if MobileView.page == 4 && !root.detail-page && (root.narrow || root.stacked-header): RulesShortcutButton { }
+                if MobileView.page == 4 && !root.detail-page && !root.standalone-detail && (root.narrow || root.stacked-header): RulesShortcutButton { }
               }
               if root.stacked-header: HeaderStatus { compact: root.usable-height < 600px; }
             }
@@ -294,7 +298,10 @@ export component MobileFrame inherits Rectangle {
                 }
             }
         }
-        MobileModal { centered: root.centered-modal || root.expanded; }
+        MobileModal {
+            centered: root.centered-modal || root.expanded;
+            height: root.height - (YamlDocument.confirm-close ? MobileView.keyboard-inset : 0px);
+        }
         RuleShortcutsDialog {
             x: MobileView.safe-left; y: MobileView.safe-top;
             width: root.usable-width; height: root.usable-height;

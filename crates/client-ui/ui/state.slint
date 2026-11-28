@@ -1,4 +1,5 @@
 import { ControlAccess } from "components/control-access.slint";
+import { YamlDocument } from "components/yaml-document.slint";
 import { DetailItem, FakeIpExclusionItem, NodeItem, NodePair, GroupItem, ProfileItem, ConnectionItem, RuleItem, LogItem, ReportItem, OverviewItem, CategoryItem, CategoryPair } from "models.slint";
 export { DetailItem, FakeIpExclusionItem, NodeItem, NodePair, GroupItem, ProfileItem, ConnectionItem, RuleItem, LogItem, ReportItem, OverviewItem, CategoryItem, CategoryPair } from "models.slint";
 
@@ -36,10 +37,17 @@ export struct Choice { id: string, label: string }
 export global UiActions {
     in-out property <int> copy-request-revision;
     callback dispatch(Intent, string, string);
+    callback close-window();
+    callback leave-document <=> YamlDocument.leave-destination;
+    leave-document(destination) => {
+        if destination == -2 { self.close-window(); }
+        else if destination == -3 { self.dispatch(Intent.quit, "", ""); }
+        else { self.dispatch(Intent.navigate, "" + destination, ""); }
+    }
 }
 export global UiData {
     pure callback controls-modal-blocked <=> ControlAccess.modal-blocked;
-    controls-modal-blocked => { self.modal != 0 && self.modal != 10 }
+    controls-modal-blocked => { (self.modal != 0 && self.modal != 10) || YamlDocument.confirm-close }
     pure callback controls-notice-blocked <=> ControlAccess.notice-blocked;
     controls-notice-blocked => { self.notice-modal }
     pure callback controls-focus-revision <=> ControlAccess.focus-revision;
