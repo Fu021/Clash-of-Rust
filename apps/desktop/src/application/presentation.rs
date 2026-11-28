@@ -1054,6 +1054,7 @@ impl App {
     }
 
     fn present_protection(&self, data: &UiData) {
+        data.set_global_override_enabled(self.settings.global_override_enabled);
         data.set_protection_pending(self.claude.protection_pending.is_some());
         let health = if self.claude.protection_pending.is_some() {
             clash_client_core::protection::status::Status::observe(true, true, false, false, None)

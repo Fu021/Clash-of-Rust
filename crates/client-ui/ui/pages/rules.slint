@@ -6,6 +6,7 @@ import { ListReorderGesture, ListReorderPreview } from "../components/list-reord
 import { GeometryTarget } from "../components/geometry.slint";
 import { PageScroll, Label, Caption, Heading, ContentPanel, ActionButton, Badge, Field, Toggle, Select, Paragraph } from "../components/controls.slint";
 import { CopyButton } from "../components/desktop-copy.slint";
+import { YamlDocument } from "../components/yaml-document.slint";
 component RulesRow inherits Rectangle {
     min-width: 0px; preferred-width: 0px; horizontal-stretch: 1;
     property <bool> protection-locked: UiData.protected || UiData.protection-pending;
@@ -124,6 +125,11 @@ export component RulesPage inherits PageSurface {
                         ActionButton { text: @tr("+ 新建规则"); primary: true; enabled: !UiData.protected && !UiData.protection-pending && UiData.rule-types.length > 0 && !UiData.working; clicked => { UiActions.dispatch(Intent.rule-add, "", ""); } }
                     }
                     Caption { text: @tr("拖动手柄排序 · 靠近边缘自动滚动 · Esc 取消 · 右箭头详情"); wrap: word-wrap; }
+                    if YamlDocument.available && UiData.global-override-enabled: HorizontalLayout {
+                        spacing: 8px; cross-axis-alignment: center;
+                        Caption { text: @tr("全局规则来自 merge.yaml，在生成运行配置时合并。"); wrap: word-wrap; }
+                        ActionButton { text: @tr("全局覆写"); compact: true; clicked => { YamlDocument.open(1, ""); } }
+                    }
                     rules := ContentPanel {
                         for rule[index] in UiData.rules: RulesRow {
                             height: root.row-extent - Theme.content-gap;

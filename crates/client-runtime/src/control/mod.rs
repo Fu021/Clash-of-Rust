@@ -122,6 +122,16 @@ pub enum Command {
         rules: crate::rule_manager::ProfileRules,
         expected: Option<String>,
     },
+    GlobalOverrideDocument,
+    SubscriptionSource {
+        request: crate::config::source_view::Request,
+    },
+    SaveGlobalOverride {
+        change: crate::config::overrides::Change,
+    },
+    CheckGlobalOverride {
+        change: crate::config::overrides::Change,
+    },
     Select {
         group: String,
         node: String,
@@ -189,6 +199,8 @@ impl Command {
             | Self::Start
             | Self::Snapshot { .. }
             | Self::RuleDocument { .. }
+            | Self::GlobalOverrideDocument
+            | Self::SubscriptionSource { .. }
             | Self::TrayNodes
             | Self::Delay { .. }
             | Self::RecoverUnreachable
@@ -214,6 +226,8 @@ impl Command {
             | Self::Activate { .. }
             | Self::DeleteProfile { .. }
             | Self::SaveRules { .. }
+            | Self::SaveGlobalOverride { .. }
+            | Self::CheckGlobalOverride { .. }
             | Self::Select { .. }
             | Self::Mode { .. }
             | Self::Proxy { .. }
@@ -240,6 +254,15 @@ struct Request {
 struct Reply<T = Value> {
     result: T,
     error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    yaml_error: Option<YamlError>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum YamlError {
+    Recovery(crate::config::documents::Recovery),
+    Syntax(crate::config::documents::SyntaxLocation),
 }
 
 #[derive(Debug, Serialize)]
@@ -405,6 +428,7 @@ mod tests {
                 id: "fixture".into(),
                 summary_only: false,
             },
+            Command::GlobalOverrideDocument,
             Command::TrayNodes,
             Command::Delay {
                 name: None,
@@ -455,6 +479,14 @@ mod tests {
             },
             Command::RuleOverrides {
                 overrides: crate::config::RuleOverrides::default(),
+            },
+            Command::SaveGlobalOverride {
+                change: crate::config::overrides::Change {
+                    text: "prepend-rules: []".into(),
+                    enabled: true,
+                    revision: "fixture".into(),
+                    expected_enabled: false,
+                },
             },
             Command::ConfigSet {
                 key: "ipv6".into(),
@@ -580,6 +612,7 @@ mod tests {
         let bytes = serde_json::to_vec(&Reply {
             result: document,
             error: None,
+            yaml_error: None,
         })
         .unwrap();
         let reply: Reply<crate::rule_manager::Document> = serde_json::from_slice(&bytes).unwrap();

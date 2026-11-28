@@ -95,6 +95,54 @@ fn legacy_message(message: &str, language: Language) -> Option<&'static str> {
         }
         "订阅已修改，请刷新后重试" => "Subscription changed; refresh and try again",
         "订阅不存在" | "订阅已不存在" => "Subscription no longer exists",
+        "已保存的 YAML 不是普通文件" => "The saved YAML is not a regular file",
+        "已保存的 YAML 超过大小限制" => "The saved YAML exceeds the size limit",
+        "已保存的 YAML 编码无效" => "The saved YAML is not valid UTF-8",
+        "无法打开已保存的 YAML" => "Could not open the saved YAML",
+        "无法按已保存设置生成运行 YAML" => {
+            "Could not generate runtime YAML from the saved settings"
+        }
+        "无法安全遮盖此 YAML 源码" => "Could not safely redact this YAML document",
+        "无法安全遮盖含复杂键的 YAML 源码" => {
+            "Could not safely redact YAML with complex keys"
+        }
+        "源码已变化，请重新打开" => {
+            "The source changed. Reopen the document and try again"
+        }
+        "源码位置无效" => "The source position is invalid",
+        "请输入有效的行号或位置" => "Enter a valid line number or position",
+        "请输入有效的行号" => "Enter a valid line number",
+        "行号必须大于零" => "The line number must be greater than zero",
+        "行号超出源码范围" => "The line number is outside the document",
+        "请输入不超过 512 字节的搜索词" => "Enter a search term of at most 512 bytes",
+        "请输入不超过 512 字节的单行搜索词" => {
+            "Enter a single-line search term of at most 512 bytes"
+        }
+        "全局覆写 YAML 格式错误" => "Invalid global override YAML",
+        "覆写草稿不是普通文件" => "The override draft is not a regular file",
+        "全局覆写不能超过 128 KiB" | "全局覆写不能超过 131072 字节" => {
+            "The global override must be at most 128 KiB"
+        }
+        "全局覆写已被另一客户端修改，请刷新后重试" => {
+            "The global override changed in another client. Reopen it and try again"
+        }
+        "设置已变更，请重新打开全局覆写" => {
+            "Settings changed. Reopen the global override and try again"
+        }
+        "内核拒绝全局覆写，请检查规则和规则集配置" => {
+            "The core rejected the global override. Check the rules and rule providers"
+        }
+        "配置提交失败，已恢复旧配置与订阅信息" => {
+            "Could not commit the configuration. The previous configuration and subscription data were restored"
+        }
+        "尚未打开外部编辑器" => "Open the external editor first",
+        "无法打开文本编辑器" => "Could not open the text editor",
+        "客户端后台未就绪" => "The client backend is not ready",
+        "Claude 保护正在切换" => "Claude protection is changing state",
+        "操作过于频繁，请稍后再试" => "Too many requests. Try again shortly",
+        "当前不可编辑" => "Editing is currently unavailable",
+        "YAML 响应无效" => "The backend returned an invalid YAML response",
+        "YAML 请求无效" => "The YAML request is invalid",
         "当前订阅已丢失" => "The current subscription is missing",
         "尚未选择订阅" | "请先选择订阅" => "Select a subscription first",
         "请先选择订阅配置" | "请先导入并选择一个订阅配置" => {
@@ -523,6 +571,9 @@ pub fn localize(message: &str, language: Language) -> Cow<'_, str> {
     }
     if let Some(translated) = legacy_message(message, language) {
         return Cow::Borrowed(translated);
+    }
+    if let Some(location) = message.strip_prefix("全局覆写 YAML 格式错误 · ") {
+        return format!("Invalid global override YAML · {location}").into();
     }
     if let Some((reason, status)) = message
         .strip_prefix("TUN 会话准备失败：")

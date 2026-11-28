@@ -15,6 +15,8 @@ hyper-util = { version = "0.1", features = ["client-legacy", "tokio"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 yaml_serde = { workspace = true }
+libyaml-rs = "0.3"
+memmap2 = "0.9"
 tokio = { workspace = true, features = ["process"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["aws_lc_rs", "tls12"] }
 tempfile = { workspace = true }

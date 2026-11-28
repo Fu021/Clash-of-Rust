@@ -6,6 +6,23 @@
 
 全端操作及异常到状态栏、可恢复错误、严重错误和 Claude 保护状态的对应关系见[分级对照](error-feedback.md)。最近错误事件另含 `level=recoverable/critical`，由宿主传入，不根据报错文案推断。
 
+## YAML 编辑与源码查看
+
+桌面和 Android 导出报告的 `data.context.events` 使用共用的最近错误记录。YAML 事件的 `code` 标识操作。可取得时，`location` 记录解析错误的行列，`io_kind` 和 `os_code` 记录文件操作错误类型与原生系统码。报告采集这些结构化字段和可公开的摘要，不采集草稿、订阅源码、外部编辑器临时路径、查找词或控制密钥。行级提示保留在编辑器中供修正。
+
+| 错误码 | 操作 |
+| --- | --- |
+| `yaml_override_open_failed` | 读取全局覆写文件 |
+| `yaml_original_read_failed` | 读取或遮盖原始订阅源码 |
+| `yaml_runtime_view_failed` | 读取或生成运行配置预览 |
+| `yaml_source_navigation_failed` | 查找、跳行或分页时获取源码 |
+| `yaml_override_check_failed` | 校验草稿及引用 |
+| `yaml_override_apply_failed` | 校验、保存或重载全局覆写 |
+| `yaml_external_open_failed` | 创建临时副本或启动外部编辑器 |
+| `yaml_external_read_failed` | 从外部编辑器读回草稿 |
+
+应用错误的 `recovery` 由实际回滚结果产生。`restored` 表示旧状态已恢复，`files_failed` 表示磁盘配置恢复失败，`runtime_failed` 表示原运行配置恢复失败，`files_and_runtime_failed` 表示两项均失败。后三项是严重错误。未进入回滚的错误不包含此字段。
+
 ## Windows 更新安装
 
 `data.local_evidence.update_installation` 区分记录已采集和不可读取；采集成功后的 `data` 来自 `update-install.json`，保存目标版本、状态、结果时间与可读原因。新版 Windows 安装器在写入失败时产生 `installer-failure.json`，读取上限 4 KiB。安装助手先将其持久保存到安装记录的 `installer_failure`，再发布结果供界面清理下载目录。该记录随后由桌面诊断和 `cor diagnose`／`--offline` 读取；只有临时文件而没有持久字段的旧版本不能保证重启后仍有这些细节。

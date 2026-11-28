@@ -98,6 +98,9 @@ pub(super) async fn execute(
     disconnected: Option<watch::Receiver<bool>>,
 ) -> Result<Payload> {
     operation.check_protection(&shared.lock().await.settings)?;
+    if let Command::SubscriptionSource { request } = operation {
+        return json_payload(Engine::subscription_source(shared, request, disconnected).await?);
+    }
     if matches!(&operation, Command::RecoverUnreachable) {
         return json_payload(Engine::recover_unreachable_cancellable(shared, disconnected).await?);
     }
@@ -365,6 +368,12 @@ pub(super) async fn execute(
         Command::RecordFailure { message } => engine.record_failure(&message),
         Command::GeoUpdate => unreachable!("handled before locking the owner"),
         Command::GeoInstall { path } => engine.install_geo(&path).await?,
+        Command::GlobalOverrideDocument => {
+            return json_payload(engine.global_override_document().await?);
+        }
+        Command::SubscriptionSource { .. } => unreachable!("handled before locking the owner"),
+        Command::SaveGlobalOverride { change } => engine.save_global_override(change).await?,
+        Command::CheckGlobalOverride { change } => engine.check_global_override(change).await?,
         Command::CheckConfig => {
             engine.check_effective_config().await?;
             return Ok(json!({"valid":true}).into());

@@ -4,6 +4,96 @@ msgstr ""
 "Content-Type: text/plain; charset=UTF-8\n"
 "Plural-Forms: nplurals=2; plural=(n != 1);\n"
 
+msgid "全局覆写"
+msgstr "Global override"
+
+msgid "订阅源码"
+msgstr "Subscription source"
+
+msgid "全局规则来自 merge.yaml，在生成运行配置时合并。"
+msgstr "Global rules from merge.yaml are merged into the runtime configuration."
+
+msgid "校验通过"
+msgstr "Validation passed"
+
+msgid "没有找到匹配内容"
+msgstr "No matches found"
+
+msgid "全局覆写不能超过 128 KiB"
+msgstr "The global override must be at most 128 KiB."
+
+msgid "放弃未应用的修改？"
+msgstr "Discard unapplied changes?"
+
+msgid "放弃修改"
+msgstr "Discard changes"
+
+msgid "原始 YAML 可能包含节点密码和订阅凭据。"
+msgstr "The original YAML may contain node passwords and subscription credentials."
+
+msgid "查看完整原文"
+msgstr "View full source"
+
+msgid "原始 YAML"
+msgstr "Original YAML"
+
+msgid "运行 YAML"
+msgstr "Runtime YAML"
+
+msgid "显示凭据"
+msgstr "Show credentials"
+
+msgid "已应用的运行配置"
+msgstr "Applied runtime configuration"
+
+msgid "按已保存设置生成的预览"
+msgstr "Preview generated from saved settings"
+
+msgid "正在显示原文，请谨慎分享"
+msgstr "Full source is visible. Take care when sharing."
+
+msgid "已隐藏识别到的凭据"
+msgstr "Recognized credentials are hidden"
+
+msgid "校验"
+msgstr "Validate"
+
+msgid "已应用"
+msgstr "Applied"
+
+msgid "正在处理…"
+msgstr "Working…"
+
+msgid "查找"
+msgstr "Find"
+
+msgid "查找下一个"
+msgstr "Find next"
+
+msgid "行号"
+msgstr "Line number"
+
+msgid "跳转"
+msgstr "Go to line"
+
+msgid "Claude 保护期间只读"
+msgstr "Read-only while Claude protection is active"
+
+msgid "YAML 文本"
+msgstr "YAML text"
+
+msgid "上一段"
+msgstr "Previous"
+
+msgid "下一段"
+msgstr "Next"
+
+msgid "撤销"
+msgstr "Undo"
+
+msgid "重做"
+msgstr "Redo"
+
 msgid "Claude 保护异常"
 msgstr "Claude protection error"
 

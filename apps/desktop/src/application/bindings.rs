@@ -1,5 +1,7 @@
 //! Native application owner. Slint runs only in a disposable child process.
 use super::*;
+use anyhow::Context;
+use clash_client_core::config::{documents, overrides};
 use clash_desktop_protocol::{self as wire, HostPacket, UiData, UiEvent, models::ViewModels};
 use futures_util::StreamExt;
 use runtime::native::Host as _;
@@ -18,6 +20,13 @@ enum HostEvent {
     Message(Message),
     Native(native::Call),
     Ui(window::Id, UiEvent),
+    Yaml(
+        window::Id,
+        i32,
+        documents::Operation,
+        anyhow::Result<String>,
+        Option<tempfile::TempDir>,
+    ),
 }
 #[cfg(target_os = "macos")]
 type HostProxy = EventLoopProxy<HostEvent>;
@@ -42,6 +51,8 @@ struct Renderer {
     retiring: bool,
     revision: u64,
     reclaim_pending: bool,
+    yaml_request: Option<(i32, tokio::sync::watch::Sender<bool>)>,
+    yaml_external: Option<tempfile::TempDir>,
 }
 #[derive(Debug)]
 struct Outbound {
@@ -61,6 +72,12 @@ fn allow_renderer_focus(child: &tokio::process::Child) {
     let _ = child;
 }
 impl Renderer {
+    fn cancel_yaml(&mut self) {
+        if let Some((_, cancel)) = self.yaml_request.take() {
+            cancel.send_replace(true);
+        }
+    }
+
     fn send(&self, packet: HostPacket) {
         if matches!(
             &packet,
@@ -75,6 +92,11 @@ impl Renderer {
                 destroy,
             });
         }
+    }
+}
+impl Drop for Renderer {
+    fn drop(&mut self) {
+        self.cancel_yaml();
     }
 }
 struct DesktopHost {
@@ -403,6 +425,8 @@ impl DesktopHost {
                 let _ = proxy.send_event(HostEvent::Message(Message::WindowStateSaved(result)));
             });
         }
+        window.cancel_yaml();
+        window.yaml_external = None;
         window.send(HostPacket::Command(wire::WindowCommand::Destroy));
         window.closing = Some(Instant::now());
         let _ = window.frames.send(None);
@@ -532,6 +556,9 @@ impl DesktopHost {
                 }
             }
             UiEvent::Close(view) => {
+                let window = self.window.as_mut().unwrap();
+                window.cancel_yaml();
+                window.yaml_external = None;
                 self.remember_view(view);
                 self.message(Message::Window((id, window::Event::CloseRequested)));
             }
@@ -545,11 +572,122 @@ impl DesktopHost {
                 #[cfg(not(target_os = "macos"))]
                 let _ = (picker, result);
             }
+            UiEvent::Yaml {
+                id: request,
+                action,
+            } => self.run_yaml(id, request, action),
             UiEvent::Error(error) => {
                 self.app.show_notice(format!("界面错误：{error}"), true);
                 self.sync();
             }
         }
+    }
+
+    fn run_yaml(&mut self, window_id: window::Id, id: i32, action: Option<String>) {
+        let window = self.window.as_mut().expect("current renderer");
+        window.cancel_yaml();
+        let Some(action) = action else {
+            window.yaml_external = None;
+            return;
+        };
+        let action = match serde_json::from_str::<documents::Action>(&action) {
+            Ok(action) => action,
+            Err(_) => {
+                window.send(HostPacket::Command(wire::WindowCommand::Yaml {
+                    id,
+                    result: Err("YAML 请求无效".into()),
+                }));
+                return;
+            }
+        };
+        let external_path = window
+            .yaml_external
+            .as_ref()
+            .map(|directory| directory.path().join("merge.yaml"));
+        let operation = action.operation();
+        let (cancel, cancellation) = tokio::sync::watch::channel(false);
+        window.yaml_request = Some((id, cancel));
+        let engine = self.app.engine.clone();
+        let transition = self.app.claude.protection_pending.is_some();
+        let proxy = self.proxy.clone();
+        self.worker.spawn(async move {
+            let mut opened = None;
+            let result = async {
+                use documents::{Action, Reply};
+                let engine = engine.context("客户端后台未就绪")?;
+                let result = match action {
+                    Action::Source(request) => Reply::Source(
+                        Engine::subscription_source(&engine, request, Some(cancellation.clone()))
+                            .await?,
+                    ),
+                    Action::OpenExternal(text) => {
+                        anyhow::ensure!(!transition, "Claude 保护正在切换");
+                        engine.lock().await.settings.require_mutable()?;
+                        anyhow::ensure!(
+                            text.len() <= overrides::EDIT_LIMIT,
+                            "全局覆写不能超过 128 KiB"
+                        );
+                        let cancel = cancellation.clone();
+                        opened = Some(
+                            tokio::task::spawn_blocking(move || {
+                                let directory =
+                                    tempfile::Builder::new().prefix("cor-override-").tempdir()?;
+                                let path = directory.path().join("merge.yaml");
+                                std::fs::write(&path, text)?;
+                                anyhow::ensure!(!*cancel.borrow(), "YAML 请求已取消");
+                                platform::open_text_editor(&path)?;
+                                Ok::<_, anyhow::Error>(directory)
+                            })
+                            .await??,
+                        );
+                        Reply::ExternalOpened
+                    }
+                    Action::ReadExternal => {
+                        anyhow::ensure!(!transition, "Claude 保护正在切换");
+                        engine.lock().await.settings.require_mutable()?;
+                        let path = external_path.context("尚未打开外部编辑器")?;
+                        Reply::ExternalDraft(
+                            tokio::task::spawn_blocking(move || overrides::read_draft(&path))
+                                .await??,
+                        )
+                    }
+                    _ => {
+                        let mut engine = engine.lock().await;
+                        anyhow::ensure!(!*cancellation.borrow(), "YAML 请求已取消");
+                        match action {
+                            Action::OpenOverride => {
+                                Reply::Override(engine.global_override_document().await?)
+                            }
+                            Action::Check(change) => {
+                                anyhow::ensure!(!transition, "Claude 保护正在切换");
+                                engine.check_global_override(change).await?;
+                                Reply::Valid
+                            }
+                            Action::Apply(change) => {
+                                anyhow::ensure!(!transition, "Claude 保护正在切换");
+                                let revision = overrides::revision(&change.text);
+                                engine.save_global_override(change).await?;
+                                Reply::Saved(revision)
+                            }
+                            Action::Source(_) | Action::OpenExternal(_) | Action::ReadExternal => {
+                                unreachable!()
+                            }
+                        }
+                    }
+                };
+                Ok::<_, anyhow::Error>(serde_json::to_string(&result)?)
+            }
+            .await;
+            let critical = result
+                .as_ref()
+                .err()
+                .and_then(|error| error.downcast_ref::<documents::Recovery>())
+                .copied()
+                .is_some_and(documents::Recovery::critical);
+            if critical || !*cancellation.borrow() {
+                let _ = proxy.send_event(HostEvent::Yaml(window_id, id, operation, result, opened));
+            }
+        });
     }
 }
 impl DesktopHost {
@@ -576,6 +714,35 @@ impl DesktopHost {
                 self.sync();
             }
             HostEvent::Ui(id, event) => self.ui_event(id, event),
+            HostEvent::Yaml(window_id, id, operation, result, opened) => {
+                let window = self.window.as_mut().filter(|window| {
+                    window.id == window_id
+                        && window.closing.is_none()
+                        && window
+                            .yaml_request
+                            .as_ref()
+                            .is_some_and(|(current, _)| *current == id)
+                });
+                let active = window.is_some();
+                let failure = result
+                    .as_ref()
+                    .err()
+                    .map(|error| documents::Failure::new(operation, error));
+                if let Some(window) = window {
+                    window.yaml_request.take();
+                    if opened.is_some() {
+                        window.yaml_external = opened;
+                    }
+                    window.send(HostPacket::Command(wire::WindowCommand::Yaml {
+                        id,
+                        result: result.map_err(|error| format!("{error:#}")),
+                    }));
+                }
+                if let Some(failure) = failure.filter(|failure| active || failure.critical()) {
+                    self.app.show_yaml_failure(failure);
+                    self.sync();
+                }
+            }
         }
     }
 }
@@ -718,6 +885,8 @@ impl native::Host for DesktopHost {
                 retiring: false,
                 revision: 0,
                 reclaim_pending: true,
+                yaml_request: None,
+                yaml_external: None,
             })
         })();
         match result {

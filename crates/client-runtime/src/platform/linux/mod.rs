@@ -60,7 +60,10 @@ pub fn set_autostart(enabled: bool) -> Result<()> {
     Ok(())
 }
 pub fn open_directory(path: &Path) -> Result<()> {
-    super::gio::open_directory(path)
+    super::gio::open_path(path)
+}
+pub fn open_text_editor(path: &Path) -> Result<()> {
+    super::gio::open_path(path).or_else(|_| super::gio::open_plain_text(path))
 }
 pub fn open_url(url: &str) -> Result<()> {
     super::gio::open_uri(url)

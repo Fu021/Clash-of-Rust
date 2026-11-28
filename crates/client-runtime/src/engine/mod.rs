@@ -8,8 +8,8 @@ use crate::{
     api::{Api, ConfigStatus, ConnectionStats, Proxies},
     assets::{self, GeoManifest},
     config::{
-        Profile, RuleOverrides, Settings, Store, atomic_write, parse_profile, read_profile,
-        read_runtime_config, runtime_config,
+        Profile, RuleOverrides, Settings, Store, atomic_write, documents::Recovery, overrides,
+        parse_profile, read_profile, read_runtime_config, runtime_config, source_view,
     },
     platform,
 };
@@ -33,6 +33,8 @@ use tokio::{
 pub use crate::proxy::ProxyMode;
 use clash_client_core::runtime::logging::{LOG_FRAME_LIMIT, LogFrames, append, read_core_logs};
 pub use clash_client_core::runtime::logging::{LOG_LIMIT, LogBuffer};
+
+static SOURCE_SLOT: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
 
 fn protection_pauses_network(settings: &Settings) -> bool {
     settings.claude_protection.is_some()
@@ -448,15 +450,30 @@ impl Engine {
     }
 
     async fn validate_in(&self, payload: &str, directory: &std::path::Path) -> Result<()> {
-        let candidate = directory.join("candidate.yaml");
-        atomic_write(&candidate, payload.as_bytes())?;
+        self.validate_candidate(payload, directory, self.settings.global_override_enabled)
+            .await
+    }
+
+    async fn validate_candidate(
+        &self,
+        payload: &str,
+        directory: &std::path::Path,
+        private: bool,
+    ) -> Result<()> {
+        use std::io::Write;
+
+        let mut candidate = tempfile::Builder::new()
+            .prefix(".candidate-")
+            .suffix(".yaml")
+            .tempfile()?;
+        candidate.write_all(payload.as_bytes())?;
         let mut child = self
             .validation_command()?
             .arg("-t")
             .arg("-d")
             .arg(directory)
             .arg("-f")
-            .arg(&candidate)
+            .arg(candidate.path())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
@@ -469,6 +486,7 @@ impl Engine {
         .await
         .context("内核配置校验超时")??;
         if !status.success() {
+            ensure!(!private, "内核拒绝全局覆写，请检查规则和规则集配置");
             let error = format!(
                 "{}\n{}",
                 String::from_utf8_lossy(&stdout),
@@ -820,20 +838,233 @@ impl Engine {
 
     fn profile_payload(&self, raw: &str, settings: &Settings, id: &str) -> Result<String> {
         let builtin = self.profiles.iter().any(|p| p.id == id && p.is_default());
-        let payload = crate::config::runtime_config_with_rules(
+        Self::stored_profile_payload(&self.store, raw, settings, id, builtin)
+    }
+
+    fn stored_profile_payload(
+        store: &Store,
+        raw: &str,
+        settings: &Settings,
+        id: &str,
+        builtin: bool,
+    ) -> Result<String> {
+        let overrides =
+            overrides::GlobalOverride::applied(store, settings.global_override_enabled, builtin)?;
+        Self::profile_payload_with_override(store, raw, settings, id, builtin, overrides.as_ref())
+    }
+
+    fn profile_payload_with_override(
+        store: &Store,
+        raw: &str,
+        settings: &Settings,
+        id: &str,
+        builtin: bool,
+        overrides: Option<&overrides::GlobalOverride>,
+    ) -> Result<String> {
+        let payload = crate::config::runtime_config_with_override(
             raw,
             settings,
             settings.rule_profiles.get(id).map(AsRef::as_ref),
             builtin,
+            overrides,
         )?;
         #[cfg(any(windows, target_os = "macos"))]
         {
             let mut config: yaml_serde::Mapping = yaml_serde::from_str(&payload)?;
-            crate::config::ingress::provider_paths(&mut config, &self.store.runtime())?;
+            crate::config::ingress::provider_paths(&mut config, &store.runtime())?;
             Ok(yaml_serde::to_string(&config)?)
         }
         #[cfg(not(any(windows, target_os = "macos")))]
-        Ok(payload)
+        {
+            let _ = store;
+            Ok(payload)
+        }
+    }
+
+    pub async fn subscription_source(
+        shared: &Arc<tokio::sync::Mutex<Self>>,
+        request: source_view::Request,
+        mut cancellation: Option<tokio::sync::watch::Receiver<bool>>,
+    ) -> Result<source_view::Page> {
+        use source_view::View;
+        let (store, settings, builtin, applied, input, overrides) = {
+            let engine = shared.lock().await;
+            if let Some(remote) = engine.remote.clone() {
+                drop(engine);
+                let response = remote.request(ControlCommand::SubscriptionSource { request });
+                return if let Some(cancellation) = &mut cancellation {
+                    tokio::select! {
+                        result = response => result,
+                        _ = cancellation.wait_for(|cancelled| *cancelled) => {
+                            bail!("源码请求已取消");
+                        }
+                    }
+                } else {
+                    response.await
+                };
+            }
+            let profile = engine
+                .profiles
+                .iter()
+                .find(|profile| profile.id == request.profile)
+                .context("订阅不存在")?;
+            let runtime = matches!(request.view, View::Runtime);
+            let applied = runtime
+                && engine.running()
+                && engine.settings.active_profile.as_deref() == Some(&profile.id);
+            let path = if applied {
+                engine.store.runtime().join("config.yaml")
+            } else {
+                engine.store.profile_path(&request.profile)?
+            };
+            let input = source_view::Input::open(&path, applied)?;
+            let store = engine.store.clone();
+            let settings = engine.settings.clone();
+            let builtin = profile.is_default();
+            let overrides = overrides::GlobalOverride::applied(
+                &store,
+                !applied && runtime && settings.global_override_enabled,
+                builtin,
+            )?;
+            (store, settings, builtin, applied, input, overrides)
+        };
+        let acquire = SOURCE_SLOT.acquire();
+        let slot = if let Some(cancellation) = &mut cancellation {
+            tokio::select! {
+                biased;
+                _ = cancellation.wait_for(|cancelled| *cancelled) => bail!("源码请求已取消"),
+                slot = acquire => slot?,
+            }
+        } else {
+            acquire.await?
+        };
+        tokio::task::spawn_blocking(move || {
+            let _slot = slot;
+            let cancelled = || cancellation.as_ref().is_some_and(|flag| *flag.borrow());
+            let large = input.is_large();
+            let result = (|| {
+                let source = input.read(cancelled)?;
+                let source = source.as_str().context("已保存的 YAML 编码无效")?;
+                let generated = if !applied && matches!(request.view, View::Runtime) {
+                    ensure!(!cancelled(), "源码请求已取消");
+                    Some(
+                        Self::profile_payload_with_override(
+                            &store,
+                            source,
+                            &settings,
+                            &request.profile,
+                            builtin,
+                            overrides.as_ref(),
+                        )
+                        .map_err(|_| anyhow::anyhow!("无法按已保存设置生成运行 YAML"))?,
+                    )
+                } else {
+                    None
+                };
+                source_view::build_page(
+                    generated.as_deref().unwrap_or(source),
+                    &settings.secret,
+                    &request,
+                    applied,
+                    cancelled,
+                )
+            })();
+            if large {
+                crate::platform::memory::release_unused_heap();
+            }
+            result
+        })
+        .await?
+    }
+
+    pub async fn global_override_document(&self) -> Result<overrides::Document> {
+        if let Some(remote) = &self.remote {
+            return remote.request(ControlCommand::GlobalOverrideDocument).await;
+        }
+        overrides::Document::read(&self.store, self.settings.global_override_enabled)
+    }
+
+    fn require_current_override_settings(&self) -> Result<()> {
+        self.settings.require_mutable()?;
+        let saved = self.store.read_settings()?;
+        saved.require_mutable()?;
+        ensure!(saved == self.settings, "设置已变更，请重新打开全局覆写");
+        Ok(())
+    }
+
+    pub async fn check_global_override(&self, change: overrides::Change) -> Result<()> {
+        if let Some(remote) = &self.remote {
+            let _: Value = remote
+                .request(ControlCommand::CheckGlobalOverride { change })
+                .await?;
+            return Ok(());
+        }
+        self.require_current_override_settings()?;
+        let overrides = change.checked(&self.store, self.settings.global_override_enabled)?;
+        let active = self
+            .settings
+            .active_profile
+            .as_deref()
+            .context("尚未选择订阅")?;
+        let (builtin, raw) = self.rule_source(active)?;
+        if !builtin {
+            let payload = Self::profile_payload_with_override(
+                &self.store,
+                &raw,
+                &self.settings,
+                active,
+                builtin,
+                Some(&overrides),
+            )?;
+            self.validate_candidate(&payload, &self.store.runtime(), true)
+                .await?;
+        }
+        Ok(())
+    }
+
+    pub async fn save_global_override(&mut self, change: overrides::Change) -> Result<()> {
+        if self.remote.is_some() {
+            self.remote_mutate(ControlCommand::SaveGlobalOverride { change })
+                .await?;
+            return Ok(());
+        }
+        let _transition = self.store.protection_transition_lock()?;
+        self.require_current_override_settings()?;
+        let overrides = change.checked(&self.store, self.settings.global_override_enabled)?;
+        let settings = Settings {
+            global_override_enabled: change.enabled,
+            ..self.settings.clone()
+        };
+        let active = settings.active_profile.as_deref().context("尚未选择订阅")?;
+        let (builtin, raw) = self.rule_source(active)?;
+        let payload = Self::profile_payload_with_override(
+            &self.store,
+            &raw,
+            &settings,
+            active,
+            builtin,
+            change.enabled.then_some(&overrides),
+        )?;
+        drop(raw);
+        let mut transaction = crate::profile_transaction::Transaction::new(&self.store.root)?;
+        transaction.stage(&self.store.root.join("merge.yaml"), change.text.as_bytes())?;
+        transaction.stage(
+            &self.store.root.join("settings.json"),
+            &serde_json::to_vec_pretty(&settings)?,
+        )?;
+        if builtin || (!settings.global_override_enabled && !self.settings.global_override_enabled)
+        {
+            transaction.prepare()?;
+            if transaction.commit().is_err() {
+                return Err(Recovery::after_attempt(transaction.rollback().is_ok(), true).into());
+            }
+        } else {
+            self.commit_profile_checked(transaction, &payload, true, Some(&change))
+                .await?;
+        }
+        self.settings = settings;
+        self.invalidate_views();
+        Ok(())
     }
 
     pub fn rule_document(&self, id: &str) -> Result<crate::rule_manager::Document> {
@@ -983,6 +1214,10 @@ impl Engine {
         ensure!(
             settings.claude_protection == self.settings.claude_protection,
             "请使用 Claude 保护开关"
+        );
+        ensure!(
+            settings.global_override_enabled == self.settings.global_override_enabled,
+            "请使用全局覆写编辑器"
         );
         if settings.controller_port == self.settings.controller_port
             && settings.mixed_port == self.settings.mixed_port
@@ -1278,10 +1513,22 @@ impl Engine {
 
     async fn commit_profile(
         &self,
-        mut transaction: crate::profile_transaction::Transaction,
+        transaction: crate::profile_transaction::Transaction,
         payload: &str,
         active: bool,
     ) -> Result<()> {
+        self.commit_profile_checked(transaction, payload, active, None)
+            .await
+    }
+
+    async fn commit_profile_checked(
+        &self,
+        mut transaction: crate::profile_transaction::Transaction,
+        payload: &str,
+        active: bool,
+        override_change: Option<&overrides::Change>,
+    ) -> Result<()> {
+        let private = override_change.is_some() || self.settings.global_override_enabled;
         let running = active && self.running();
         let (previous, next) = if running {
             let path = self.store.runtime().join("config.yaml");
@@ -1294,13 +1541,21 @@ impl Engine {
             };
             let previous = preserved(&read_runtime_config(&path)?)?;
             let next = preserved(payload)?;
-            self.validate(&next).await?;
+            self.validate_candidate(&next, &self.store.runtime(), private)
+                .await?;
             transaction.stage(&path, next.as_bytes())?;
             (Some(previous), Some(next))
         } else {
-            self.validate(payload).await?;
+            self.validate_candidate(payload, &self.store.runtime(), private)
+                .await?;
             (None, None)
         };
+        if let Some(change) = override_change {
+            self.require_current_override_settings()?;
+            self.global_override_document()
+                .await?
+                .verify(&change.revision, change.expected_enabled)?;
+        }
         transaction.prepare()?;
         let changed = async {
             if let Some(next) = &next {
@@ -1324,6 +1579,9 @@ impl Engine {
                 Ok(())
             };
             let disk = transaction.rollback();
+            if override_change.is_some() {
+                return Err(Recovery::after_attempt(disk.is_ok(), runtime.is_ok()).into());
+            }
             match (runtime, disk) {
                 (Ok(()), Ok(())) => {
                     return Err(error.context("配置提交失败，已恢复旧配置与订阅信息"));

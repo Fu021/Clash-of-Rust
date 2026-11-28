@@ -20,18 +20,26 @@ impl Session {
         settings: &core::config::Settings,
         profile: &str,
     ) -> Result<String> {
-        let supported = if settings
+        let supported = self.application_runtime_supported(settings, profile)?;
+        core::application_rules::runtime(source, raw, settings, profile, supported)
+    }
+
+    pub(crate) fn application_runtime_supported(
+        &self,
+        settings: &core::config::Settings,
+        profile: &str,
+    ) -> Result<bool> {
+        if settings
             .application_rules
             .get(profile)
             .is_some_and(|rules| !rules.is_empty())
             && settings.claude_protection.is_none()
             && settings.run_mode == "rule"
         {
-            self.application_policy_supported()?
+            self.application_policy_supported()
         } else {
-            false
-        };
-        core::application_rules::runtime(source, raw, settings, profile, supported)
+            Ok(false)
+        }
     }
 
     pub fn save_application_rules(&mut self, profile: &str, rules: Vec<Rule>) -> Result<()> {

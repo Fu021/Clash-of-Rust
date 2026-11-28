@@ -12,6 +12,16 @@ unsafe extern "C" {
         context: Pointer,
         error: *mut Pointer,
     ) -> c_int;
+    fn g_app_info_get_default_for_type(
+        content_type: *const c_char,
+        must_support_uris: c_int,
+    ) -> Pointer;
+    fn g_app_info_launch(
+        application: Pointer,
+        files: *const FileList,
+        context: Pointer,
+        error: *mut Pointer,
+    ) -> c_int;
     fn g_settings_schema_source_get_default() -> Pointer;
     fn g_settings_schema_source_lookup(
         source: Pointer,
@@ -90,6 +100,13 @@ impl Drop for Object {
             g_object_unref(self.0);
         }
     }
+}
+
+#[repr(C)]
+struct FileList {
+    data: Pointer,
+    next: *const FileList,
+    previous: *const FileList,
 }
 struct Variant(Pointer);
 impl Drop for Variant {
@@ -389,20 +406,50 @@ pub(super) fn open_uri(uri: &str) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn open_directory(path: &std::path::Path) -> Result<()> {
+pub(super) fn open_path(path: &std::path::Path) -> Result<()> {
     use std::os::unix::ffi::OsStrExt;
     let absolute = std::path::absolute(path)?;
     let path = CString::new(absolute.as_os_str().as_bytes())?;
     unsafe {
         let file = g_file_new_for_path(path.as_ptr());
-        ensure!(!file.is_null(), "无法打开目录");
+        ensure!(!file.is_null(), "无法打开路径");
         let file = Object(file);
         let uri = g_file_get_uri(file.0);
-        ensure!(!uri.is_null(), "无法生成目录地址");
+        ensure!(!uri.is_null(), "无法生成文件地址");
         let text = CStr::from_ptr(uri).to_string_lossy().into_owned();
         g_free(uri.cast());
         open_uri(&text)
     }
+}
+
+pub(super) fn open_plain_text(path: &std::path::Path) -> Result<()> {
+    use std::os::unix::ffi::OsStrExt;
+    let path = CString::new(path.as_os_str().as_bytes())?;
+    // SAFETY: GIO returns owned references. Both objects and the single
+    // borrowed GList node stay alive throughout the synchronous launch.
+    unsafe {
+        let application = g_app_info_get_default_for_type(c"text/plain".as_ptr(), 0);
+        ensure!(!application.is_null(), "无法打开默认文本编辑器");
+        let application = Object(application);
+        let file = g_file_new_for_path(path.as_ptr());
+        ensure!(!file.is_null(), "无法打开路径");
+        let file = Object(file);
+        let files = FileList {
+            data: file.0,
+            next: std::ptr::null(),
+            previous: std::ptr::null(),
+        };
+        ensure!(
+            g_app_info_launch(
+                application.0,
+                &files,
+                std::ptr::null_mut(),
+                std::ptr::null_mut()
+            ) != 0,
+            "无法打开默认文本编辑器"
+        );
+    }
+    Ok(())
 }
 
 pub(super) fn notify_kde() -> Result<()> {

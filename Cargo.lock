@@ -715,6 +715,8 @@ dependencies = [
  "futures-util",
  "hyper-util",
  "libc",
+ "libyaml-rs",
+ "memmap2",
  "regex",
  "reqwest",
  "semver",

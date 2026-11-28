@@ -227,6 +227,9 @@ pub fn set_autostart(enabled: bool) -> Result<()> {
 pub fn open_directory(path: &Path) -> Result<()> {
     native::open_directory(path)
 }
+pub fn open_text_editor(path: &Path) -> Result<()> {
+    native::open_text_editor(path)
+}
 pub fn open_url(url: &str) -> Result<()> {
     let parsed = reqwest::Url::parse(url)?;
     if parsed.scheme() != "https" || parsed.host_str().is_none() || url.contains('\0') {

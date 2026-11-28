@@ -28,6 +28,8 @@ import { IpCheckPage } from "pages/ip-check.slint";
 import { AiCheckPage } from "pages/ai-check.slint";
 import { SettingsPage, SettingsNavigation } from "pages/settings.slint";
 import { AppDialog } from "dialogs/app-dialog.slint";
+import { YamlDocument, YamlDocumentPanel } from "components/yaml-document.slint";
+export { YamlDocument, YamlHighlight } from "components/yaml-document.slint";
 import "../../../resources/fonts/SourceHanSansCN-Regular.otf";
 export component AppWindow inherits Window {
     MotionScope { }
@@ -45,6 +47,11 @@ export component AppWindow inherits Window {
     animate background { duration: Motion.appearance; enabled: Motion.active; }
     in-out property <bool> dark <=> UiData.dark;
     in-out property <int> page <=> UiData.page;
+    changed page => { YamlDocument.close(); }
+    changed minimized => { if self.minimized { YamlDocument.close(); } }
+    property <bool> document-protected: UiData.protected || UiData.protection-pending;
+    changed document-protected => { YamlDocument.protected = self.document-protected; }
+    init => { YamlDocument.protected = self.document-protected; }
     in-out property <length> window-min-width: 800px;
     in-out property <length> window-min-height: 450px;
     min-width: root.window-min-width;
@@ -215,9 +222,10 @@ export component AppWindow inherits Window {
                 GeometryTarget { key: "content"; bounds: [page-host.absolute-position.x, page-host.absolute-position.y, page-host.width, page-host.height]; }
                 if UiData.page == 0: HomePage { }
                 if UiData.page == 1: ProxiesPage { }
-                if UiData.page == 2: SubscriptionsPage { }
+                if UiData.page == 2 && YamlDocument.mode == 0: SubscriptionsPage { }
                 if UiData.page == 3: ConnectionsPage { }
-                if UiData.page == 4: RulesPage { }
+                if UiData.page == 4 && YamlDocument.mode == 0: RulesPage { }
+                if YamlDocument.mode > 0: YamlDocumentPanel { }
                 if UiData.page == 5: LogsPage { }
                 if UiData.page == 6: NetworkPage { }
                 if UiData.page == 7: IpCheckPage { }

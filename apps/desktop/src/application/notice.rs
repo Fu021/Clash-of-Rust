@@ -175,11 +175,24 @@ impl App {
     }
 
     pub(super) fn show_notice(&mut self, text: String, error: bool) {
-        self.present_notice(text, error, false, false);
+        self.present_notice(text, error, false, false, None);
     }
 
     pub(super) fn show_critical(&mut self, text: String) {
-        self.present_notice(text, true, true, false);
+        self.present_notice(text, true, true, false, None);
+    }
+
+    pub(super) fn show_yaml_failure(
+        &mut self,
+        failure: clash_client_core::config::documents::Failure,
+    ) {
+        self.present_notice(
+            failure.message(self.presentation_language),
+            true,
+            failure.critical(),
+            false,
+            Some(failure.incident()),
+        );
     }
 
     pub(super) fn show_copy_failure(&mut self) {
@@ -190,7 +203,7 @@ impl App {
             );
             self.notice_copy_failed = true;
         } else {
-            self.present_notice(String::new(), true, false, true);
+            self.present_notice(String::new(), true, false, true, None);
         }
     }
 
@@ -218,7 +231,7 @@ impl App {
 
     pub(super) fn update_unreachable_notice(&mut self, text: String) {
         if self.notice_visible && self.notice_network_recovery {
-            self.present_notice(text, true, false, self.notice_copy_failed);
+            self.present_notice(text, true, false, self.notice_copy_failed, None);
             self.notice_network_recovery = true;
         }
     }
@@ -278,15 +291,27 @@ impl App {
     }
 
     fn record_notice_issue(&mut self, text: &str, critical: bool) {
-        self.issue_events
-            .push_back(clash_client_core::support::incident(text, critical));
+        self.record_incident(clash_client_core::support::incident(text, critical));
+    }
+
+    fn record_incident(&mut self, incident: serde_json::Value) {
+        self.issue_events.push_back(incident);
         while self.issue_events.len() > 20 {
             self.issue_events.pop_front();
         }
     }
 
-    fn present_notice(&mut self, text: String, error: bool, critical: bool, copy_failed: bool) {
-        if error {
+    fn present_notice(
+        &mut self,
+        text: String,
+        error: bool,
+        critical: bool,
+        copy_failed: bool,
+        incident: Option<serde_json::Value>,
+    ) {
+        if let Some(incident) = incident {
+            self.record_incident(incident);
+        } else if error {
             let issue = if copy_failed && text.is_empty() {
                 desktop_view::CopyFeedback::Failed.text(Language::SimplifiedChinese)
             } else {

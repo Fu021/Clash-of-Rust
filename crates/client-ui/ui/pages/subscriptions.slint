@@ -5,6 +5,7 @@ import { Label, Caption, ContentPanel, Panel, ActionButton, Badge, Field } from 
 import { ListView } from "../components/page-list.slint";
 import { GeometryTarget } from "../components/geometry.slint";
 import { PageViews, ViewToggle } from "../components/view-toggle.slint";
+import { YamlDocument } from "../components/yaml-document.slint";
 
 component ProfileActions inherits HorizontalLayout {
     in property <ProfileItem> profile;
@@ -78,11 +79,19 @@ component ProfileCard inherits ContentPanel {
                 Caption { text: root.profile.detail; wrap: word-wrap; }
                 GeometryTarget { key: "profile-usage:" + root.profile.id; bounds: [usage.absolute-position.x, usage.absolute-position.y, usage.width, usage.height]; }
             }
-            ActionButton {
-                text: @tr("删除订阅"); compact: true; quiet: true; danger: !root.profile.builtin;
-                geometry-key: "profile-delete:" + root.profile.id;
-                enabled: !root.profile.builtin && !UiData.working && !UiData.protected && !UiData.protection-pending;
-                clicked => { UiActions.dispatch(Intent.delete-profile, root.profile.id, ""); }
+            HorizontalLayout {
+                spacing: 4px; alignment: start;
+                if YamlDocument.available: ActionButton {
+                    text: @tr("订阅源码"); compact: true; quiet: true;
+                    geometry-key: "profile-yaml:" + root.profile.id;
+                    clicked => { YamlDocument.open(2, root.profile.id); }
+                }
+                ActionButton {
+                    text: @tr("删除订阅"); compact: true; quiet: true; danger: !root.profile.builtin;
+                    geometry-key: "profile-delete:" + root.profile.id;
+                    enabled: !root.profile.builtin && !UiData.working && !UiData.protected && !UiData.protection-pending;
+                    clicked => { UiActions.dispatch(Intent.delete-profile, root.profile.id, ""); }
+                }
             }
         }
     }
@@ -109,6 +118,7 @@ export component SubscriptionsPage inherits PageSurface {
             }
             HorizontalLayout { spacing: Theme.content-gap; cross-axis-alignment: center;
                 Field { placeholder: @tr("搜索名称或来源"); focus-id: "page-search"; text <=> UiData.query; edited(value) => { UiActions.dispatch(Intent.query, value, ""); } }
+                if YamlDocument.available: ActionButton { text: @tr("全局覆写"); geometry-key: "global-override"; compact: true; clicked => { YamlDocument.open(1, ""); } }
             }
             grid := ListView {
                 content-key: UiData.page-offset + "/" + UiData.query + "/" + (UiData.profiles-paginated ? "paged" : "all");

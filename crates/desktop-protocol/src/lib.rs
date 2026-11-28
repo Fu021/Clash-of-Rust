@@ -90,7 +90,7 @@ impl<T: Clone> List<T> {
 }
 include!(concat!(env!("OUT_DIR"), "/contract.rs"));
 
-pub const PROTOCOL: u32 = 22;
+pub const PROTOCOL: u32 = 23;
 pub const LIMIT: usize = 8 * 1024 * 1024;
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 pub struct Size {
@@ -131,6 +131,10 @@ pub enum WindowCommand {
     MinSize(Option<Size>),
     FocusInput(String),
     PickFile(u64),
+    Yaml {
+        id: i32,
+        result: Result<String, String>,
+    },
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum HostPacket {
@@ -177,6 +181,10 @@ pub enum UiEvent {
     FilePicked {
         id: u64,
         result: Result<Option<std::path::PathBuf>, String>,
+    },
+    Yaml {
+        id: i32,
+        action: Option<String>,
     },
     Error(String),
 }

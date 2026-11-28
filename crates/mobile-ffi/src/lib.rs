@@ -10,6 +10,7 @@ use serde_json::{Value, json};
 use std::{path::PathBuf, sync::Arc, time::Instant};
 
 pub mod application_rules;
+pub mod documents;
 pub mod overview;
 
 pub const PROTECTION_RECOVERY_FILE: &str = "protection-recovery.json";
@@ -259,6 +260,10 @@ impl Session {
         settings.validate()?;
         self.settings.require_settings_change(&settings)?;
         ensure!(
+            settings.global_override_enabled == self.settings.global_override_enabled,
+            "请使用全局覆写编辑器"
+        );
+        ensure!(
             self.runtime(&settings)? == self.runtime(&self.settings)?,
             "此设置修改需要重载网络，请使用完整保存入口"
         );
@@ -287,7 +292,7 @@ impl Session {
     pub fn runtime(&self, settings: &Settings) -> Result<String> {
         let id = settings.active_profile.as_deref().context("尚未选择订阅")?;
         let raw = core::config::read_profile(&self.store.profile_path(id)?)?;
-        let runtime = mobile_runtime(&raw, settings, id, self.profile_builtin(id))?;
+        let runtime = mobile_runtime(&self.store, &raw, settings, id, self.profile_builtin(id))?;
         self.application_runtime(&raw, &runtime, settings, id)
     }
 
@@ -308,7 +313,7 @@ impl Session {
             .context("当前订阅已丢失")?
             .is_default();
         let source = core::config::read_profile(&store.profile_path(profile)?)?;
-        let runtime = mobile_runtime(&source, &settings, profile, builtin)?;
+        let runtime = mobile_runtime(&store, &source, &settings, profile, builtin)?;
         let expected = core::application_rules::runtime(
             &source,
             &runtime,
@@ -320,7 +325,8 @@ impl Session {
         let saved = read_saved_configuration(&path, 20 * 1024 * 1024)?;
         if saved != expected.as_bytes() {
             let legacy = if builtin {
-                let runtime = mobile_runtime(&source, &settings, profile, false)?;
+                let runtime =
+                    mobile_runtime_with_override(&source, &settings, profile, false, None)?;
                 Some(core::application_rules::runtime(
                     &source,
                     &runtime,
@@ -450,13 +456,34 @@ impl Session {
             settings.claude_protection == self.settings.claude_protection,
             "请使用 Claude 保护开关"
         );
+        ensure!(
+            settings.global_override_enabled == self.settings.global_override_enabled,
+            "请使用全局覆写编辑器"
+        );
         if self.settings.presentation_change_only(&settings) {
             settings.validate()?;
             self.store.save_settings(&settings)?;
             self.settings = settings;
             return Ok(());
         }
-        self.apply_settings(settings)
+        self.apply_settings(settings, None)
+    }
+
+    pub fn global_override_document(&self) -> Result<core::config::overrides::Document> {
+        core::config::overrides::Document::read(&self.store, self.settings.global_override_enabled)
+    }
+
+    pub fn save_global_override(&mut self, change: core::config::overrides::Change) -> Result<()> {
+        self.ensure_storage_ready()?;
+        self.settings.require_mutable()?;
+        let saved = read_saved_settings(&self.store.root)?;
+        saved.require_mutable()?;
+        ensure!(saved == self.settings, "设置已变更，请重新打开全局覆写");
+        let settings = Settings {
+            global_override_enabled: change.enabled,
+            ..self.settings.clone()
+        };
+        self.apply_settings(settings, Some(change))
     }
 
     pub fn commit_protection(
@@ -464,11 +491,14 @@ impl Session {
         protection: Option<Arc<core::claude_check::protection::Protection>>,
         run_mode: String,
     ) -> Result<()> {
-        self.apply_settings(Settings {
-            claude_protection: protection,
-            run_mode,
-            ..self.settings.clone()
-        })
+        self.apply_settings(
+            Settings {
+                claude_protection: protection,
+                run_mode,
+                ..self.settings.clone()
+            },
+            None,
+        )
     }
 
     pub fn restore_protection(
@@ -613,7 +643,11 @@ impl Session {
         Ok(())
     }
 
-    fn apply_settings(&mut self, mut settings: Settings) -> Result<()> {
+    fn apply_settings(
+        &mut self,
+        mut settings: Settings,
+        change: Option<core::config::overrides::Change>,
+    ) -> Result<()> {
         settings.normalize();
         settings.direct_download_port = self.settings.direct_download_port;
         if settings.mixed_port == settings.controller_port {
@@ -622,7 +656,41 @@ impl Session {
                 .port();
         }
         settings.validate()?;
-        let raw = self.runtime(&settings)?;
+        let mut tx = core::profile_transaction::Transaction::new(&self.store.root)?;
+        let global_override = change.is_some();
+        let raw = if let Some(change) = change {
+            let config = change.checked(&self.store, self.settings.global_override_enabled)?;
+            tx.stage(&self.store.root.join("merge.yaml"), change.text.as_bytes())?;
+            let id = settings.active_profile.as_deref().context("尚未选择订阅")?;
+            let builtin = self.profile_builtin(id);
+            if builtin || (!change.enabled && !self.settings.global_override_enabled) {
+                tx.stage(
+                    &self.store.root.join("settings.json"),
+                    &serde_json::to_vec_pretty(&settings)?,
+                )?;
+                tx.prepare()?;
+                if tx.commit().is_err() {
+                    return Err(core::config::documents::Recovery::after_attempt(
+                        tx.rollback().is_ok(),
+                        true,
+                    )
+                    .into());
+                }
+                self.settings = settings;
+                return Ok(());
+            }
+            let source = core::config::read_profile(&self.store.profile_path(id)?)?;
+            let candidate = mobile_runtime_with_override(
+                &source,
+                &settings,
+                id,
+                builtin,
+                change.enabled.then_some(&config),
+            )?;
+            self.application_runtime(&source, &candidate, &settings, id)?
+        } else {
+            self.runtime(&settings)?
+        };
         let api = self.api.reconfigured(&settings)?;
         let route = core::active_route::root(&raw)?;
         let path = self.store.runtime().join("config.yaml");
@@ -630,7 +698,6 @@ impl Session {
             .running
             .then(|| core::config::read_runtime_config(&path))
             .transpose()?;
-        let mut tx = core::profile_transaction::Transaction::new(&self.store.root)?;
         tx.stage(
             &self.store.root.join("settings.json"),
             &serde_json::to_vec_pretty(&settings)?,
@@ -654,6 +721,13 @@ impl Session {
             let runtime = self.native.request(
                 json!({"op":"reload","config":old_raw,"ipv6":effective_ipv6(&self.settings)}),
             );
+            if global_override {
+                return Err(core::config::documents::Recovery::after_attempt(
+                    disk.is_ok(),
+                    runtime.is_ok(),
+                )
+                .into());
+            }
             disk.context("配置写入失败，磁盘恢复也失败")?;
             runtime.context("内核拒绝配置后恢复失败")?;
             if protection_changed {
@@ -667,6 +741,13 @@ impl Session {
                 self.native
                     .request(json!({"op":"reload","config":old_raw,"ipv6":effective_ipv6(&self.settings)}))
             }).transpose();
+            if global_override {
+                return Err(core::config::documents::Recovery::after_attempt(
+                    disk.is_ok(),
+                    runtime.is_ok(),
+                )
+                .into());
+            }
             disk.context("配置写入失败，磁盘恢复也失败")?;
             runtime.context("配置保存失败，内核恢复也失败")?;
             if protection_changed {
@@ -942,7 +1023,7 @@ impl Session {
         let old_raw = (active && self.running)
             .then(|| core::config::read_runtime_config(&path))
             .transpose()?;
-        let runtime = mobile_runtime(&raw, &self.settings, &id, false)?;
+        let runtime = mobile_runtime(&self.store, &raw, &self.settings, &id, false)?;
         let new_runtime = active
             .then(|| self.application_runtime(&raw, &runtime, &self.settings, &id))
             .transpose()?;
@@ -1304,7 +1385,8 @@ impl Session {
         let active = next.active_profile.as_deref() == Some(profile.id.as_str());
         if !active || !self.running {
             let raw = core::config::read_profile(&self.store.profile_path(&profile.id)?)?;
-            let runtime = mobile_runtime(&raw, &next, &profile.id, profile.is_default())?;
+            let runtime =
+                mobile_runtime(&self.store, &raw, &next, &profile.id, profile.is_default())?;
             let runtime = self.application_runtime(&raw, &runtime, &next, &profile.id)?;
             validate_custom_rule_references(&runtime, &self.draft)?;
         }
@@ -1323,17 +1405,34 @@ pub fn effective_ipv6(settings: &Settings) -> bool {
 }
 
 fn mobile_runtime(
+    store: &Store,
     source: &str,
     settings: &Settings,
     profile: &str,
     builtin: bool,
 ) -> Result<String> {
+    let overrides = core::config::overrides::GlobalOverride::applied(
+        store,
+        settings.global_override_enabled,
+        builtin,
+    )?;
+    mobile_runtime_with_override(source, settings, profile, builtin, overrides.as_ref())
+}
+
+fn mobile_runtime_with_override(
+    source: &str,
+    settings: &Settings,
+    profile: &str,
+    builtin: bool,
+    overrides: Option<&core::config::overrides::GlobalOverride>,
+) -> Result<String> {
     let rules = ProfileRules::for_profile(settings, profile, builtin);
-    android_safe_config(&core::config::runtime_config_with_rules(
+    android_safe_config(&core::config::runtime_config_with_override(
         source,
         settings,
         Some(&rules),
         builtin,
+        overrides,
     )?)
 }
 
@@ -1555,6 +1654,79 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn global_override_preserves_runtime_and_document_on_reload_failure() {
+        use super::core::config::documents::Recovery;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        #[derive(Default)]
+        struct Host(AtomicUsize);
+
+        impl NativeHost for Host {
+            fn request(&self, request: Value) -> Result<Value> {
+                if request["op"] == "reload"
+                    && self
+                        .0
+                        .try_update(Ordering::AcqRel, Ordering::Acquire, |left| {
+                            left.checked_sub(1)
+                        })
+                        .is_ok()
+                {
+                    anyhow::bail!("simulated reload failure");
+                }
+                Ok(json!({"running":true}))
+            }
+        }
+
+        let root = tempfile::tempdir().unwrap();
+        let host = Arc::new(Host::default());
+        let mut session = Session::open(root.path().into(), host.clone()).unwrap();
+        let original = "# retain this comment\nproxies: []\nrules: ['MATCH,DIRECT']\n";
+        session
+            .save_profile(None, "Fixture", "", Some(original))
+            .await
+            .unwrap();
+        let id = session.profiles.last().unwrap().id.clone();
+        session.activate(&id).unwrap();
+        session.attach_or_initialize().unwrap();
+        let document = session.global_override_document().unwrap();
+        let path = session.store.runtime().join("config.yaml");
+        let old = std::fs::read(&path).unwrap();
+        let change = || core::config::overrides::Change {
+            text: "append-rules: ['DOMAIN,fixture.invalid,REJECT']".into(),
+            enabled: true,
+            revision: document.revision.clone(),
+            expected_enabled: false,
+        };
+
+        host.0.store(1, Ordering::Release);
+        let error = session.save_global_override(change()).unwrap_err();
+        assert_eq!(error.downcast_ref::<Recovery>(), Some(&Recovery::Restored));
+        assert_eq!(std::fs::read(&path).unwrap(), old);
+        assert!(!session.store.root.join("merge.yaml").exists());
+        assert!(!session.settings.global_override_enabled);
+        assert!(!core::profile_transaction::pending(root.path()).unwrap());
+
+        host.0.store(2, Ordering::Release);
+        let error = session.save_global_override(change()).unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<Recovery>(),
+            Some(&Recovery::RuntimeFailed)
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), old);
+        assert!(!session.store.root.join("merge.yaml").exists());
+        assert!(!session.settings.global_override_enabled);
+        assert!(!core::profile_transaction::pending(root.path()).unwrap());
+
+        session.save_global_override(change()).unwrap();
+        assert!(session.settings.global_override_enabled);
+        assert_eq!(session.raw().unwrap(), original);
+        let (runtime, _) = Session::cold_android_runtime(root.path(), false).unwrap();
+        assert!(runtime.contains("DOMAIN,fixture.invalid,REJECT"));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), runtime);
+        assert!(session.save_global_override(change()).is_err());
+    }
+
+    #[tokio::test]
     async fn cold_android_runtime_rejects_valid_but_stale_yaml_and_malformed_settings() {
         struct Host;
         impl NativeHost for Host {
@@ -1616,7 +1788,8 @@ mod tests {
         settings.rule_overrides.enabled = [true; 5];
         session.commit_settings(settings.clone()).unwrap();
         let source = session.raw().unwrap();
-        let legacy_runtime = mobile_runtime(&source, &settings, &profile, false).unwrap();
+        let legacy_runtime =
+            mobile_runtime_with_override(&source, &settings, &profile, false, None).unwrap();
         let legacy = session
             .application_runtime(&source, &legacy_runtime, &settings, &profile)
             .unwrap();

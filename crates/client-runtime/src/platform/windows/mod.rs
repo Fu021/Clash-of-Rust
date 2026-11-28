@@ -324,6 +324,31 @@ pub fn open_directory(path: &Path) -> Result<()> {
     Ok(())
 }
 
+pub fn open_text_editor(path: &Path) -> Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+
+    let wide_path: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
+    // SAFETY: both UTF-16 buffers are NUL-terminated and borrowed only for
+    // this call. The optional window, arguments and directory are null.
+    let result = unsafe {
+        ShellExecuteW(
+            std::ptr::null_mut(),
+            wide("edit").as_ptr(),
+            wide_path.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            1,
+        )
+    };
+    if result <= 32 {
+        std::process::Command::new("notepad.exe")
+            .arg(path)
+            .spawn()
+            .context("无法打开文本编辑器")?;
+    }
+    Ok(())
+}
+
 pub fn open_url(url: &str) -> Result<()> {
     let result = unsafe {
         ShellExecuteW(

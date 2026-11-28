@@ -52,6 +52,8 @@ mod fonts;
 mod language_ui;
 #[path = "live_language.rs"]
 mod live_language;
+#[path = "yaml_ui.rs"]
+mod yaml_ui;
 
 slint::include_modules!();
 static EVENTS: LazyLock<NativeEvents> = LazyLock::new(NativeEvents::new);
@@ -536,6 +538,7 @@ fn run(app: slint::android::AndroidApp) -> Result<()> {
         .set_connection_detail_snapshots(true);
     window.global::<MobileData>().set_working(true);
     let (commands, receive) = mpsc::channel::<Request>(32);
+    let yaml_requests = yaml_ui::bind(&window);
     let (show_detail, visible_detail) = watch::channel(None);
     let dismiss_detail = show_detail.clone();
     window
@@ -722,7 +725,7 @@ fn run(app: slint::android::AndroidApp) -> Result<()> {
                         run_loop(
                             startup,
                             session,
-                            SessionInputs { receive, native_events, visibility, visible_detail },
+                            SessionInputs { receive, native_events, visibility, visible_detail, yaml_requests },
                             weak,
                             profile_gate,
                             recovery,
@@ -797,6 +800,7 @@ enum Update {
     DownloadProgress(u64, core::update::Progress),
     Downloaded(u64, std::result::Result<(), String>),
     IncidentPresented(u64),
+    YamlFinished(yaml_ui::Outcome),
 }
 
 #[derive(Clone)]
@@ -1102,6 +1106,7 @@ struct SessionInputs {
     native_events: NativeEventReceiver,
     visibility: watch::Receiver<bool>,
     visible_detail: watch::Receiver<Option<ConnectionSelection>>,
+    yaml_requests: mpsc::Receiver<yaml_ui::Request>,
 }
 
 async fn run_loop(
@@ -1117,6 +1122,7 @@ async fn run_loop(
         mut native_events,
         mut visibility,
         mut visible_detail,
+        mut yaml_requests,
     } = inputs;
     let OpenedSession {
         session,
@@ -1255,7 +1261,16 @@ async fn run_loop(
         let mut protection_reservation_released = false;
         let mut profile_completed = None;
         let mut overview_refresh = false;
+        let mut yaml_incident = None;
+        let mut yaml_notice_cancel = None;
         tokio::select! {
+            Some(request) = yaml_requests.recv() => {
+                let protection_pending = state.protection_change.is_some()
+                    || state.saved_protection_recovery.is_active();
+                if *visibility.borrow() {
+                    yaml_ui::run(&mut state.session, request, protection_pending, updates.clone());
+                }
+            }
             value = receive.recv() => {
                 let Some(request) = value else { break; };
                 let intent = request.intent;
@@ -1665,6 +1680,27 @@ async fn run_loop(
                             }
                         }
                     }
+                    Some(Update::YamlFinished(outcome)) => {
+                        let (saved, failure) = outcome.finish(&weak);
+                        if let Some((failure, cancel)) = failure {
+                            state.notice = failure.message(state.presentation_language);
+                            state.notice_error = true;
+                            state.notice_critical = failure.critical();
+                            yaml_incident = Some(failure.incident());
+                            yaml_notice_cancel = Some(cancel);
+                            immediate = true;
+                        }
+                        if saved {
+                            state.rule_rows = None;
+                            state.overview_epoch = state.overview_epoch.wrapping_add(1);
+                            reset_subscription_results(&mut state, &mut checks, &mut claude_jobs);
+                            cancel_delay(&mut state, &mut delay_job);
+                            if let Some(job) = refresh_job.take() { job.abort(); }
+                            refresh_generation += 1;
+                            refresh_requested = true;
+                            immediate = true;
+                        }
+                    }
                     Some(Update::ProtectionVerified(ticket, request, result)) => {
                         if let Some(change) = state.protection_change.as_mut()
                             && ProtectionJob::finish(&mut change.job, &ticket, Some(&request)) {
@@ -2006,6 +2042,9 @@ async fn run_loop(
         let visible = *visibility.borrow_and_update();
         if state.visible != visible {
             state.visible = visible;
+            if !visible {
+                let _ = weak.upgrade_in_event_loop(|ui| ui.global::<YamlDocument>().invoke_close());
+            }
             immediate = true;
             refresh_requested = true;
         }
@@ -2308,7 +2347,10 @@ async fn run_loop(
         let notice_critical = std::mem::take(&mut state.notice_critical);
         let notice_network_recovery = std::mem::take(&mut state.notice_network_recovery);
         let notice_followup = std::mem::take(&mut state.notice_followup);
-        if notice_error && !notice.is_empty() {
+        let yaml_notice_active = move |cancel: Option<&watch::Receiver<bool>>| {
+            notice_critical || cancel.is_none_or(|cancel| !*cancel.borrow())
+        };
+        if notice_error && !notice.is_empty() && yaml_notice_active(yaml_notice_cancel.as_ref()) {
             if !system_notice
                 && let Err(error) = state.session.native.request(json!({
                     "op":"notify-incident","critical":notice_critical
@@ -2317,9 +2359,10 @@ async fn run_loop(
                 log::warn!("Incident notification unavailable: {error:#}");
             }
             if !system_notice || record_system_notice {
-                state
-                    .issue_events
-                    .push_back(core::support::incident(&notice, notice_critical));
+                state.issue_events.push_back(
+                    yaml_incident
+                        .unwrap_or_else(|| core::support::incident(&notice, notice_critical)),
+                );
                 while state.issue_events.len() > 20 {
                     state.issue_events.pop_front();
                 }
@@ -2351,10 +2394,11 @@ async fn run_loop(
                 }
                 let page = view.page;
                 apply(&ui, view);
+                ui.global::<YamlDocument>().set_available(true);
                 if ui.get_current_page() == page {
                     recovery.publish(page);
                 }
-                if !notice.is_empty() {
+                if !notice.is_empty() && yaml_notice_active(yaml_notice_cancel.as_ref()) {
                     let current = ui.global::<MobileView>();
                     let presented = if !current.get_notice().is_empty()
                         && current.get_notice_error()
@@ -4945,6 +4989,7 @@ fn apply(ui: &AndroidWindow, p: Projection) {
     }
     data.set_protection_supported(true);
     data.set_protected(p.settings.claude_protection.is_some());
+    data.set_global_override_enabled(p.settings.global_override_enabled);
     data.set_protection_pending(p.protection_pending);
     if (data.get_protected() || p.protection_pending) && ui.global::<MobileView>().get_detail() == 2
     {

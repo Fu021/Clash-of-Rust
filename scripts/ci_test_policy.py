@@ -135,7 +135,7 @@ def select(paths, extended=False):
     mobile_ui = any(
         (path.startswith('crates/client-ui/ui/components/')
          and not path.startswith('crates/client-ui/ui/components/desktop-'))
-        or path.startswith(('crates/client-ui/ui/mobile/', 'crates/client-ui/ui/theme/',
+        or path.startswith(('crates/client-ui/shared/', 'crates/client-ui/ui/mobile/', 'crates/client-ui/ui/theme/',
                          'crates/client-ui/ui/icons/', 'apps/android/native/', 'resources/fonts/',
                          'translations/android/', 'translations/shared/',
                          'crates/mobile-ffi/src/', 'crates/client-core/src/config/',

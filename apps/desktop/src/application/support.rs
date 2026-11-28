@@ -207,6 +207,32 @@ mod tests {
     }
 
     #[test]
+    fn yaml_warnings_use_actual_recovery_and_keep_safe_diagnostics_after_dismissal() {
+        use clash_client_core::config::documents::{Failure, Operation, Recovery};
+
+        let mut app = App::initial_state(Err(anyhow::anyhow!("initializing")), None);
+        app.dismiss_notice();
+        app.show_yaml_failure(Failure::new(Operation::Apply, &Recovery::Restored.into()));
+        assert!(app.notice_visible && app.error && !app.notice_critical);
+        app.show_yaml_failure(Failure::new(
+            Operation::Apply,
+            &Recovery::RuntimeFailed.into(),
+        ));
+        assert!(app.notice_visible && app.error && app.notice_critical);
+        app.show_yaml_failure(Failure::new(
+            Operation::ReadExternal,
+            &anyhow::anyhow!("synthetic path /fixture/private/view.yaml"),
+        ));
+        assert!(app.notice_critical);
+        app.dismiss_notice();
+        let context = app.diagnostic_context("");
+        let events = context["events"].as_array().unwrap();
+        assert_eq!(events[events.len() - 2]["level"], "critical");
+        assert_eq!(events.last().unwrap()["code"], "yaml_external_read_failed");
+        assert!(!context.to_string().contains("/fixture/private"));
+    }
+
+    #[test]
     fn exported_context_is_independent_of_the_notice_and_report_languages() {
         let snapshot = |language| {
             let mut app = App::initial_state(Err(anyhow::anyhow!("initializing")), None);

@@ -31,9 +31,14 @@ pub struct Transaction {
     prepared: bool,
 }
 fn allowed(path: &Path) -> bool {
-    if ["settings.json", "profiles.json", "runtime/config.yaml"]
-        .iter()
-        .any(|target| path == Path::new(target))
+    if [
+        "settings.json",
+        "profiles.json",
+        "merge.yaml",
+        "runtime/config.yaml",
+    ]
+    .iter()
+    .any(|target| path == Path::new(target))
     {
         return true;
     }

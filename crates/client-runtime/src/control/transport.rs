@@ -28,6 +28,11 @@ const VIEW_IDLE_DELAY: Duration = Duration::from_secs(3);
 fn decode_reply<T: DeserializeOwned>(bytes: &[u8]) -> Result<T> {
     let reply: Reply<&RawValue> = serde_json::from_slice(bytes)?;
     if let Some(error) = reply.error {
+        match reply.yaml_error {
+            Some(YamlError::Recovery(recovery)) => return Err(recovery.into()),
+            Some(YamlError::Syntax(location)) => return Err(location.into()),
+            None => {}
+        }
         bail!("{error}");
     }
     Ok(serde_json::from_str(reply.result.get())?)
@@ -333,6 +338,7 @@ pub async fn serve(engine: &Arc<Mutex<Engine>>, owner: Owner) -> Result<()> {
                         | Command::UpdatePrepareTerminal
                         | Command::UpdateSelected { .. }
                         | Command::Import { .. }
+                        | Command::SubscriptionSource { .. }
                 ) {
                     let (cancellation, disconnected) = watch::channel(false);
                     until_disconnect(
@@ -360,12 +366,24 @@ pub async fn serve(engine: &Arc<Mutex<Engine>>, owner: Owner) -> Result<()> {
                     Ok(result) => Reply {
                         result,
                         error: None,
+                        yaml_error: None,
                     },
                     Err(error) => {
                         let secret = engine.lock().await.settings.secret.clone();
+                        let yaml_error = error
+                            .downcast_ref::<crate::config::documents::Recovery>()
+                            .copied()
+                            .map(YamlError::Recovery)
+                            .or_else(|| {
+                                error
+                                    .downcast_ref::<crate::config::documents::SyntaxLocation>()
+                                    .copied()
+                                    .map(YamlError::Syntax)
+                            });
                         Reply {
                             result: Value::Null.into(),
                             error: Some(format!("{error:#}").replace(&secret, "[密钥]")),
+                            yaml_error,
                         }
                     }
                 };
@@ -383,6 +401,7 @@ pub async fn serve(engine: &Arc<Mutex<Engine>>, owner: Owner) -> Result<()> {
                         bytes = serde_json::to_vec(&Reply {
                             result: Value::Null,
                             error: Some("结果超过 32 MiB，请缩小查询范围".into()),
+                            yaml_error: None,
                         })
                         .expect("static reply");
                     }
@@ -438,6 +457,7 @@ mod tests {
         let bytes = serde_json::to_vec(&Reply {
             result,
             error: None,
+            yaml_error: None,
         })
         .unwrap();
         let legacy: Reply = serde_json::from_slice(&bytes).unwrap();
@@ -455,6 +475,22 @@ mod tests {
             decode_reply::<Poll>(br#"{"result":null,"error":"backend unavailable"}"#).unwrap_err();
         assert_eq!(error.to_string(), "backend unavailable");
         assert!(decode_reply::<Poll>(br#"{"result":null,"error":null}"#).is_err());
+    }
+
+    #[test]
+    fn yaml_apply_recovery_severity_survives_the_local_control_connection() {
+        use crate::config::documents::Recovery;
+
+        for recovery in [Recovery::Restored, Recovery::RuntimeFailed] {
+            let bytes = serde_json::to_vec(&Reply {
+                result: Value::Null,
+                error: Some(recovery.to_string()),
+                yaml_error: Some(YamlError::Recovery(recovery)),
+            })
+            .unwrap();
+            let error = decode_reply::<()>(&bytes).unwrap_err();
+            assert_eq!(error.downcast_ref::<Recovery>(), Some(&recovery));
+        }
     }
 
     #[test]

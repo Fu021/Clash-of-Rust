@@ -5,11 +5,13 @@ import { MobileHome, MobileProxies, MobileSubscriptions, MobileConnections, Mobi
 import { AndroidSettings } from "settings.slint";
 import { AndroidApplications } from "applications.slint";
 import { AndroidApplicationPolicies } from "application-policies.slint";
+import { YamlDocument, YamlDocumentPanel } from "../../components/yaml-document.slint";
 
 // Android owns this composition and may replace/add pages without iOS changes.
 export component AndroidSurface inherits MobileFrame {
     go-back => {
-        if MobileView.detail == 19 && AndroidData.policies-choosing {
+        if YamlDocument.mode > 0 { root.document-back(); }
+        else if MobileView.detail == 19 && AndroidData.policies-choosing {
             AndroidData.policies-choosing = false; AndroidData.policies-scroll-y = 0px;
         } else if MobileView.detail == 19 && AndroidData.policies-editing && !MobileView.draft-dirty {
             MobileActions.request(MobileIntent.application-policy, "cancel", "");
@@ -26,8 +28,10 @@ export component AndroidSurface inherits MobileFrame {
     changed policies-visible => {
         if !root.policies-visible { MobileActions.request(MobileIntent.application-policy, "close", ""); }
     }
-    standalone-detail: MobileView.detail == 18 || MobileView.detail == 19 || (MobileView.detail == 12 && (MobileView.pending-detail == 18 || MobileView.pending-detail == 19));
-    standalone-title: root.policies-visible ? @tr("应用规则") : @tr("应用分流");
+    standalone-detail: YamlDocument.mode > 0 || MobileView.detail == 18 || MobileView.detail == 19 || (MobileView.detail == 12 && (MobileView.pending-detail == 18 || MobileView.pending-detail == 19));
+    standalone-title: YamlDocument.mode > 0 ? (YamlDocument.mode == 1 ? @tr("全局覆写") : @tr("订阅源码")) : root.policies-visible ? @tr("应用规则") : @tr("应用分流");
+    callback document-back();
+    document-back => { YamlDocument.request-close(); }
     centered-modal: false;
     update-available: AndroidData.update-available;
     update-busy: AndroidData.update-busy;
@@ -43,15 +47,16 @@ export component AndroidSurface inherits MobileFrame {
     }
     if MobileView.page == 0: MobileHome { }
     if MobileView.page == 1: MobileProxies { }
-    if MobileView.page == 2: MobileSubscriptions { }
+    if MobileView.page == 2 && YamlDocument.mode == 0: MobileSubscriptions { }
     if MobileView.page == 3: MobileConnections { }
-    if MobileView.page == 4: MobileRules { }
+    if MobileView.page == 4 && YamlDocument.mode == 0: MobileRules { }
     if MobileView.page == 5: MobileLogs { }
     if MobileView.page == 6: MobileNetwork { }
     if MobileView.page == 7: MobileIpCheck { }
     if MobileView.page == 8: MobileAiCheck { protection-retry: AndroidData.protection-retry; }
     if MobileView.page == 9 && !root.standalone-detail: AndroidSettings { }
-    if root.standalone-detail && !root.policies-visible: AndroidApplications { }
+    if root.standalone-detail && !root.policies-visible && YamlDocument.mode == 0: AndroidApplications { }
     if root.standalone-detail && root.policies-visible: AndroidApplicationPolicies { }
     if MobileView.page == 10: MobileTools { }
+    if YamlDocument.mode > 0: YamlDocumentPanel { compact: true; }
 }

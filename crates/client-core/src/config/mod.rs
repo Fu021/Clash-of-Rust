@@ -9,8 +9,11 @@ use yaml_serde::{Mapping, Value};
 
 mod dns;
 pub use dns::{DEFAULT_DNS_NAMESERVERS, DEFAULT_FAKE_IP_EXCLUSIONS};
+pub mod documents;
 pub mod ingress;
 mod locale;
+pub mod overrides;
+pub mod source_view;
 
 pub use locale::{Language, LanguagePreference};
 mod ports;
@@ -213,6 +216,8 @@ pub struct Settings {
     pub profiles_paginated: bool,
     pub tui_node_sort: crate::proxy_order::NodeSort,
     pub rule_overrides: RuleOverrides,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub global_override_enabled: bool,
     pub rule_profiles:
         std::collections::BTreeMap<String, std::sync::Arc<crate::rule_manager::ProfileRules>>,
     pub application_rules:
@@ -262,6 +267,7 @@ impl Default for Settings {
             profiles_paginated: false,
             tui_node_sort: crate::proxy_order::NodeSort::LatencyAscending,
             rule_overrides: RuleOverrides::default(),
+            global_override_enabled: false,
             rule_profiles: Default::default(),
             application_rules: Default::default(),
         }
@@ -533,18 +539,23 @@ impl Store {
         Ok(Self { root })
     }
     pub fn load_settings(&self) -> Result<Settings> {
-        let path = self.root.join("settings.json");
-        let bytes = match std::fs::read(&path) {
-            Ok(bytes) => bytes,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+        match self.read_settings() {
+            Err(error)
+                if error
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound) =>
+            {
                 let settings = Settings::default();
                 self.save_settings(&settings)?;
-                return Ok(settings);
+                Ok(settings)
             }
-            Err(error) => {
-                return Err(error).with_context(|| format!("无法读取设置文件：{}", path.display()));
-            }
-        };
+            result => result,
+        }
+    }
+    pub fn read_settings(&self) -> Result<Settings> {
+        let path = self.root.join("settings.json");
+        let bytes = std::fs::read(&path)
+            .with_context(|| format!("无法读取设置文件：{}", path.display()))?;
         let mut settings: Settings = serde_json::from_slice(&bytes)
             .with_context(|| format!("设置文件格式错误：{}", path.display()))?;
         settings.normalize();
@@ -700,6 +711,7 @@ fn retry_file_operation<T>(
 }
 
 pub const PROFILE_LIMIT: usize = 10 * 1024 * 1024;
+pub const RUNTIME_LIMIT: usize = 64 * 1024 * 1024;
 
 /// Bounds allocation even if a file grows after its metadata was checked.
 pub fn read_profile(path: &Path) -> Result<String> {
@@ -707,20 +719,27 @@ pub fn read_profile(path: &Path) -> Result<String> {
 }
 
 pub fn read_runtime_config(path: &Path) -> Result<String> {
-    read_config_text(path, 64 * 1024 * 1024)
+    read_config_text(path, RUNTIME_LIMIT)
 }
 
 fn read_config_text(path: &Path, limit: usize) -> Result<String> {
     use std::io::Read;
+    let size_error = || {
+        if limit >= 1024 * 1024 {
+            anyhow::anyhow!("配置超过 {} MiB 限制", limit / 1024 / 1024)
+        } else {
+            anyhow::anyhow!("配置超过 {} KiB 限制", limit / 1024)
+        }
+    };
     let file = std::fs::File::open(path)
         .with_context(|| format!("配置文件无法读取：{}", path.display()))?;
     if file.metadata()?.len() > limit as u64 {
-        bail!("配置超过 {} MiB 限制", limit / 1024 / 1024);
+        return Err(size_error());
     }
     let mut raw = String::new();
     file.take(limit as u64 + 1).read_to_string(&mut raw)?;
     if raw.len() > limit {
-        bail!("配置超过 {} MiB 限制", limit / 1024 / 1024);
+        return Err(size_error());
     }
     Ok(raw)
 }
@@ -751,12 +770,25 @@ pub fn runtime_config_with_rules(
     rules: Option<&crate::rule_manager::ProfileRules>,
     builtin: bool,
 ) -> Result<String> {
+    runtime_config_with_override(raw, settings, rules, builtin, None)
+}
+
+pub fn runtime_config_with_override(
+    raw: &str,
+    settings: &Settings,
+    rules: Option<&crate::rule_manager::ProfileRules>,
+    builtin: bool,
+    global_override: Option<&overrides::GlobalOverride>,
+) -> Result<String> {
     settings.validate()?;
     let mut map = parse_profile(raw)?;
     if let Some(rules) = rules {
         crate::rule_manager::apply(&mut map, rules, builtin)?;
     } else if !builtin {
         apply_rules(&mut map, &settings.rule_overrides)?;
+    }
+    if !builtin && let Some(global_override) = global_override {
+        global_override.apply(&mut map)?;
     }
     ingress::subscription(&mut map);
     for key in ["port", "socks-port", "redir-port", "tproxy-port"] {

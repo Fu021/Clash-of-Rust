@@ -1,7 +1,10 @@
 //! The renderer owns no Engine, settings writer, notification sender or tray.
 use crate::{activation, apply, apply_if_current, intent, repaint, view_state};
-use clash_client_core::config::Language;
-use clash_client_ui::{AppWindow, Motion, Theme, UiActions, UiData, models::ViewModels};
+use clash_client_core as yaml_core;
+use clash_client_core::config::{Language, LanguagePreference};
+use clash_client_ui::{
+    AppWindow, Motion, Theme, UiActions, UiData, YamlDocument, YamlHighlight, models::ViewModels,
+};
 use clash_desktop_protocol::{self as wire, HostPacket, UiEvent, WindowCommand};
 use slint::{
     ComponentHandle, Model, Timer,
@@ -14,6 +17,8 @@ use std::{
     sync::mpsc,
     time::Duration,
 };
+#[path = "../../../crates/client-ui/shared/yaml_document.rs"]
+mod yaml_document;
 thread_local! {static FRONTEND:RefCell<Option<Frontend>>=const{RefCell::new(None)};}
 struct Frontend {
     window: AppWindow,
@@ -46,6 +51,124 @@ fn project_copy(frame: &mut wire::Frame, pending: Option<PendingCopy>, displayed
 fn send(output: &mpsc::Sender<UiEvent>, event: UiEvent) {
     let _ = output.send(event);
 }
+
+fn send_yaml(
+    window: &AppWindow,
+    output: &mpsc::Sender<UiEvent>,
+    result: anyhow::Result<clash_client_core::config::documents::Action>,
+) {
+    let document = window.global::<YamlDocument>();
+    let id = document.get_request_id();
+    let result = result
+        .and_then(|action| serde_json::to_string(&action).map_err(Into::into))
+        .and_then(|action| {
+            output
+                .send(UiEvent::Yaml {
+                    id,
+                    action: Some(action),
+                })
+                .map_err(|_| anyhow::anyhow!("无法连接本机客户端后台"))
+        });
+    if let Err(error) = result {
+        yaml_document::respond(&document, id, Err(error.to_string()), yaml_language(window));
+    }
+}
+
+fn yaml_language(window: &AppWindow) -> Language {
+    LanguagePreference::from_tag(window.global::<UiData>().get_language().as_str())
+        .unwrap_or_default()
+        .resolve_desktop()
+}
+
+fn bind_yaml(window: &AppWindow, output: &mpsc::Sender<UiEvent>) {
+    let document = window.global::<YamlDocument>();
+    document.set_available(true);
+    document.set_font_family(clash_client_ui::fonts::editor_font());
+    document.set_external_editor(true);
+    let weak = window.as_weak();
+    let sender = output.clone();
+    document.on_load(move |kind, argument| {
+        if let Some(window) = weak.upgrade() {
+            let document = window.global::<YamlDocument>();
+            send_yaml(
+                &window,
+                &sender,
+                yaml_document::load(&document, &kind, &argument),
+            );
+        }
+    });
+    let weak = window.as_weak();
+    let sender = output.clone();
+    document.on_write(move |apply| {
+        if let Some(window) = weak.upgrade() {
+            let document = window.global::<YamlDocument>();
+            send_yaml(&window, &sender, yaml_document::write(&document, apply));
+        }
+    });
+    let weak = window.as_weak();
+    let sender = output.clone();
+    document.on_external(move |reload| {
+        use clash_client_core::config::documents::Action;
+        if let Some(window) = weak.upgrade() {
+            let document = window.global::<YamlDocument>();
+            if document.get_editable() && !document.get_writing() {
+                document.set_error(Default::default());
+                document.set_status(Default::default());
+                document.set_writing(true);
+                send_yaml(
+                    &window,
+                    &sender,
+                    Ok(if reload {
+                        Action::ReadExternal
+                    } else {
+                        Action::OpenExternal(document.get_text().to_string())
+                    }),
+                );
+            }
+        }
+    });
+    let weak = window.as_weak();
+    let sender = output.clone();
+    document.on_cancel(move || {
+        if let Some(window) = weak.upgrade() {
+            let id = window.global::<YamlDocument>().get_request_id();
+            send(&sender, UiEvent::Yaml { id, action: None });
+            let _ = slint::invoke_from_event_loop(
+                clash_desktop_shell::platform::memory::release_unused_heap,
+            );
+        }
+    });
+    let weak = window.as_weak();
+    document.on_edited(move || {
+        if let Some(window) = weak.upgrade() {
+            yaml_document::edited(&window.global::<YamlDocument>());
+        }
+    });
+    let weak = window.as_weak();
+    document.on_locate(move |offset| {
+        if let Some(window) = weak.upgrade() {
+            yaml_document::locate(&window.global::<YamlDocument>(), offset);
+        }
+    });
+    let weak = window.as_weak();
+    document.on_edit_position(move |kind, argument, anchor, cursor| {
+        if let Some(window) = weak.upgrade() {
+            let document = window.global::<YamlDocument>();
+            if let Err(error) =
+                yaml_document::edit_position(&document, &kind, &argument, anchor, cursor)
+            {
+                yaml_document::show_error(&document, &error.to_string(), yaml_language(&window));
+            }
+        }
+    });
+    let weak = window.as_weak();
+    document.on_indent(move || {
+        if let Some(window) = weak.upgrade() {
+            yaml_document::indent(window.window());
+        }
+    });
+}
+
 fn metrics(window: &AppWindow) -> wire::Metrics {
     // Event filters run before Slint updates its cached geometry. Read the
     // native state to avoid echoing a stale size/DPI/minimized state to the host.
@@ -197,6 +320,7 @@ pub fn run() -> anyhow::Result<()> {
         }
     });
     let window = AppWindow::new()?;
+    bind_yaml(&window, &output);
     let language = Language::from_tag(&language).unwrap_or(Language::English);
     slint::select_bundled_translation(language.slint_tag())?;
     crate::install_localized_names(&window);
@@ -254,6 +378,7 @@ pub fn run() -> anyhow::Result<()> {
     let close = output.clone();
     window.window().on_close_requested(move || {
         if let Some(window) = weak.upgrade() {
+            window.global::<YamlDocument>().invoke_close();
             send(&close, UiEvent::Close(view_state::capture(&window)));
         }
         slint::CloseRequestResponse::KeepWindowShown
@@ -366,7 +491,9 @@ pub fn run() -> anyhow::Result<()> {
                     if let winit::keyboard::Key::Character(text) = &event.logical_key
                         && command
                     {
-                        let action = if text.eq_ignore_ascii_case("f") {
+                        let action = if text.eq_ignore_ascii_case("f")
+                            && window.global::<YamlDocument>().get_mode() == 0
+                        {
                             Some(wire::Intent::FocusSearch)
                         } else if cfg!(target_os = "macos") && text.eq_ignore_ascii_case("q") {
                             Some(wire::Intent::Quit)
@@ -534,8 +661,20 @@ fn packet(bytes: &[u8]) {
             }
             HostPacket::Command(command) => match command {
                 WindowCommand::Destroy => {
+                    front.window.global::<YamlDocument>().invoke_close();
                     let _ = front.window.hide();
                     let _ = slint::quit_event_loop();
+                }
+                WindowCommand::Yaml { id, result } => {
+                    let result = result.and_then(|data| {
+                        serde_json::from_str(&data).map_err(|_| "YAML 响应无效".into())
+                    });
+                    yaml_document::respond(
+                        &front.window.global::<YamlDocument>(),
+                        id,
+                        result,
+                        yaml_language(&front.window),
+                    );
                 }
                 WindowCommand::Show | WindowCommand::Focus => {
                     let weak = front.window.as_weak();

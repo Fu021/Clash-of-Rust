@@ -13,6 +13,7 @@ import { MobileReportBlocks } from "reports.slint";
 import { HomeConnections } from "../../components/home-section.slint";
 import { NodeItem, ProfileItem, CategoryItem, ConnectionItem, RuleItem, LogItem } from "../../models.slint";
 import { MobileData, MobileView, MobileActions, MobileIntent } from "state.slint";
+import { YamlDocument } from "../../components/yaml-document.slint";
 import { MText, MSmall, MHeading, MParagraph, MCard, MButton, MPagination, MRow, MDivider, MSwitch, MField, MSelect, MTag, MNav, MScroll, ListView, ListHeader, MProgress, MCopyButton, MDragHandle, MToolHeading } from "controls.slint";
 
 export global MobilePageText {
@@ -297,6 +298,10 @@ export component MobileSubscriptions inherits PageSurface {
         }
         HorizontalLayout { cross-axis-alignment: center; spacing: MobileTypography.small-gap;
             MSmall { text: MobileData.profile-page; }
+            if YamlDocument.available: MButton {
+                text: @tr("全局覆写"); geometry-key: "global-override"; compact: true;
+                clicked => { YamlDocument.open(1, ""); }
+            }
             MButton { geometry-key: "profiles-pagination"; text: MobileData.profiles-paginated ? @tr("显示全部") : @tr("分页显示"); compact: true; quiet: true; width: max(100px, MobileTypography.font-size(13) * 7 + 20px); horizontal-stretch: 0;
                 clicked => { MobileActions.request(MobileIntent.profile-pagination, MobileData.profiles-paginated ? "false" : "true", ""); }
             }
@@ -342,6 +347,10 @@ export component MobileSubscriptions inherits PageSurface {
                 MSmall { text: @tr("完整名称：{}", profile.name); wrap: word-wrap; }
                 MSmall { text: profile.detail; wrap: word-wrap; }
                 MSmall { text: @tr("来源：{}", profile.source); wrap: word-wrap; }
+                if YamlDocument.available: MButton {
+                    text: @tr("订阅源码"); geometry-key: "profile-yaml:" + profile.id; compact: true; quiet: true;
+                    clicked => { YamlDocument.open(2, profile.id); }
+                }
                 HorizontalLayout { spacing: MobileTypography.small-gap;
                     MButton { geometry-key: "profile-update:" + profile.id; text: @tr("更新订阅"); compact: true; quiet: true; enabled: !profile.local && !profile.builtin && card.mutable;
                         clicked => { MobileActions.request(MobileIntent.update-profile, profile.id, ""); }
@@ -655,6 +664,11 @@ export component MobileRules inherits PageSurface {
     property <length> card-padding: root.width < 420px ? 8px : Theme.card-padding;
     property <bool> scrolling-footer: root.height < 420px || Theme.text-scale > 1.25 || MobileView.keyboard-inset > 0px;
     VerticalLayout { spacing: MobileTypography.gap;
+        if YamlDocument.available && MobileData.global-override-enabled: HorizontalLayout {
+            spacing: 6px; cross-axis-alignment: center;
+            MSmall { text: @tr("全局规则来自 merge.yaml，在生成运行配置时合并。"); wrap: word-wrap; }
+            MButton { text: @tr("全局覆写"); compact: true; clicked => { YamlDocument.open(1, ""); } }
+        }
         Rectangle {
             clip: true;
             measurement := RulesRow {

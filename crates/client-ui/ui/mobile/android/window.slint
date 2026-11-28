@@ -1,8 +1,10 @@
 // Production Android entry. No preview values, fake status bar or fixtures.
 import { AndroidSurface } from "app.slint";
-import { MobileView, MobileActions, MobileIntent } from "../shared/state.slint";
+import { MobileData, MobileView, MobileActions, MobileIntent } from "../shared/state.slint";
 import { AndroidActions, AndroidIntent, AndroidData } from "state.slint";
 import { Theme } from "../../theme/palette.slint";
+import { YamlDocument } from "../../components/yaml-document.slint";
+export { YamlDocument, YamlHighlight } from "../../components/yaml-document.slint";
 export { MobileData, MobileView, MobileActions, MobileIntent } from "../shared/state.slint";
 export { ConnectionDetailSnapshot, ConnectionDetailStatus, SelectOption } from "../shared/state.slint";
 export { AndroidData, AndroidActions, AndroidIntent } from "state.slint";
@@ -36,7 +38,9 @@ export component AndroidWindow inherits Window {
     in-out property <string> query <=> MobileView.query;
     in-out property <string> rule-edit-id;
     out property <[length]> notice-close-target <=> surface.notice-close-target;
-    changed current-page => { MobileActions.request(MobileIntent.navigate, "" + root.current-page, ""); }
+    changed current-page => { YamlDocument.close(); MobileActions.request(MobileIntent.navigate, "" + root.current-page, ""); }
+    property <bool> document-protected: MobileData.protected || MobileData.protection-pending;
+    changed document-protected => { YamlDocument.protected = self.document-protected; }
     callback native-back();
     native-back => {
         if MobileView.notice != "" && MobileView.notice-error { MobileView.notice = ""; }
@@ -45,6 +49,7 @@ export component AndroidWindow inherits Window {
             // The platform hides the IME on Back; do not also navigate away
             // from the editor or open its discard-draft dialog.
         }
+        else if YamlDocument.mode > 0 { surface.document-back(); }
         else if MobileView.modal {
             if MobileView.detail == 13 { MobileActions.request(MobileIntent.install-update, "", "cancel"); }
             MobileView.detail=MobileView.detail==12 ? MobileView.pending-detail : 0;
@@ -61,6 +66,7 @@ export component AndroidWindow inherits Window {
     changed right => { MobileView.safe-right = self.right; }
     changed keyboard => { MobileView.keyboard-inset = self.keyboard; }
     init => {
+        YamlDocument.protected = self.document-protected;
         MobileView.safe-top = self.top; MobileView.safe-bottom = self.bottom;
         MobileView.safe-left = self.left; MobileView.safe-right = self.right;
         MobileView.keyboard-inset = self.keyboard;
