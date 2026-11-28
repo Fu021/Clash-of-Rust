@@ -10,6 +10,9 @@ msgstr "Global override"
 msgid "外部编辑器"
 msgstr "External editor"
 
+msgid "重新打开外部编辑器"
+msgstr "Reopen external editor"
+
 msgid "应用并关闭"
 msgstr "Apply and close"
 
@@ -21,9 +24,6 @@ msgstr "Subscription source"
 
 msgid "返回"
 msgstr "Back"
-
-msgid "全局规则来自 merge.yaml，在生成运行配置时合并。"
-msgstr "Global rules from merge.yaml are merged into the runtime configuration."
 
 msgid "没有找到匹配内容"
 msgstr "No matches found"
@@ -830,9 +830,6 @@ msgstr "All sources"
 
 msgid "+ 新建规则"
 msgstr "+ New rule"
-
-msgid "拖动手柄排序 · 靠近边缘自动滚动 · Esc 取消 · 右箭头详情"
-msgstr "Drag to reorder · Move near the edge to scroll · Esc cancels · Right arrow opens details"
 
 msgid "没有匹配的规则"
 msgstr "No matching rules"

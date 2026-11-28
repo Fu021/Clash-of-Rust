@@ -52,6 +52,7 @@ pub enum Event {
     Toggle(usize, bool),
     Filter(SourceFilter),
     Select(String),
+    ShowDetail(String),
     Add,
     Edit,
     Delete,
@@ -191,6 +192,7 @@ pub struct State {
     pub(super) rows: Vec<Row>,
     pub(super) warnings: Vec<String>,
     pub(super) selected: Option<String>,
+    pub(super) detail_open: bool,
     pub(super) filter: SourceFilter,
     pub(super) editor: Option<Editor>,
     pub(super) move_open: bool,
@@ -208,6 +210,7 @@ impl State {
 
     pub fn clear_selection(&mut self) {
         self.selected = None;
+        self.detail_open = false;
     }
     pub fn has_editor(&self) -> bool {
         self.editor.is_some()
@@ -219,13 +222,16 @@ impl State {
         self.editor.as_ref().is_some_and(Editor::modified)
     }
     pub fn modal_open(&self) -> bool {
-        self.editor.is_some() || self.move_open || self.pending_profile.is_some()
+        self.detail_open
+            || self.editor.is_some()
+            || self.move_open
+            || self.pending_profile.is_some()
     }
     pub fn load(&mut self, document: Arc<Document>, rules: Arc<ProfileRules>) {
         self.document = Some(document);
         self.draft = rules.clone();
         self.saved = rules;
-        self.selected = None;
+        self.clear_selection();
         self.editor = None;
         self.move_open = false;
         self.pending_profile = None;
@@ -246,6 +252,7 @@ impl State {
             self.draft = self.saved.clone();
         }
         self.document = None;
+        self.detail_open = false;
         self.rows = Vec::new();
         self.warnings = Vec::new();
     }
@@ -258,7 +265,7 @@ impl State {
             .as_ref()
             .is_some_and(|id| !self.rows.iter().any(|r| &r.id == id))
         {
-            self.selected = None;
+            self.clear_selection();
         }
     }
     pub(super) fn selected_index(&self) -> Option<usize> {
@@ -367,6 +374,10 @@ use anyhow::Context;
 
 impl App {
     pub(crate) fn update_rules(&mut self, event: Event) -> Task<Message> {
+        if matches!(&event, Event::CloseEditor) && self.rule_state.detail_open {
+            self.rule_state.detail_open = false;
+            return Task::none();
+        }
         if self.working || self.exiting {
             return Task::none();
         }
@@ -398,7 +409,7 @@ impl App {
             Event::CancelProfile => state.pending_profile = None,
             Event::Filter(filter) => {
                 state.filter = filter;
-                state.selected = None;
+                state.clear_selection();
                 self.list_offset = 0;
             }
             Event::Toggle(index, enabled) => {
@@ -413,7 +424,16 @@ impl App {
                     state.rebuild();
                 }
             }
-            Event::Select(id) => state.selected = Some(id),
+            Event::Select(id) => {
+                state.selected = Some(id);
+                state.detail_open = false;
+            }
+            Event::ShowDetail(id) => {
+                if self.page == Page::Rules && state.rows.iter().any(|row| row.id == id) {
+                    state.selected = Some(id);
+                    state.detail_open = true;
+                }
+            }
             Event::Add => {
                 state.editor = Some(Editor::new(
                     None,
@@ -421,6 +441,7 @@ impl App {
                 ))
             }
             Event::Edit => {
+                state.detail_open = false;
                 if let Some(rule) = state.selected_custom() {
                     state.editor = Some(Editor::new(
                         Some(rule),
@@ -429,6 +450,7 @@ impl App {
                 }
             }
             Event::Delete => {
+                state.detail_open = false;
                 if let Some(id) = state.selected_custom().map(|r| r.id.clone()) {
                     let draft = Arc::make_mut(&mut state.draft);
                     draft.custom.retain(|r| r.id != id);
@@ -437,6 +459,7 @@ impl App {
                 }
             }
             Event::Enable => {
+                state.detail_open = false;
                 if let Err(error) = state.toggle_selected() {
                     self.show_notice(error.to_string(), true);
                     return Task::none();
@@ -449,6 +472,7 @@ impl App {
             }
             Event::Drop(source, target) => state.drop_rule(&source, &target),
             Event::MoveOpen => {
+                state.detail_open = false;
                 state.move_open = true;
                 state.move_position = state.selected_index().map_or(1, |i| i + 1).to_string();
             }
@@ -471,6 +495,7 @@ impl App {
                 state.move_open = false;
             }
             Event::Restore => {
+                state.detail_open = false;
                 if !state.draft.order.is_empty() {
                     Arc::make_mut(&mut state.draft).order.clear();
                 }

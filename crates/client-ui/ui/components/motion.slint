@@ -41,9 +41,10 @@ export component Entrance {
 // without an extra timer or a callback racing conditional destruction.
 export component Presence {
     in property <bool> open;
+    in property <bool> motion-enabled: Motion.active;
     out property <float> progress: self.open ? 1 : 0;
     out property <bool> mounted: self.open || self.progress > 0;
-    animate progress { duration: Motion.reveal; easing: ease-out; enabled: Motion.active; }
+    animate progress { duration: Motion.reveal; easing: ease-out; enabled: root.motion-enabled; }
 }
 
 // Pages remain conditional: only the newly selected page enters, no page cache.
@@ -71,7 +72,7 @@ export component Disclosure inherits Rectangle {
     height: body.preferred-height * presence.progress;
     clip: true;
     opacity: presence.progress;
-    presence := Presence { open: root.expanded; }
+    presence := Presence { open: root.expanded; motion-enabled: Motion.layout-active; }
     body := VerticalLayout {
         y: 0px; height: self.preferred-height; alignment: start; spacing: 0px;
         @children

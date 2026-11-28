@@ -219,6 +219,7 @@ impl App {
                 "3" => rules_view::SourceFilter::Subscription,
                 _ => rules_view::SourceFilter::All,
             })),
+            Intent::RuleSelect if b == "detail" => Message::Rules(R::ShowDetail(a.into())),
             Intent::RuleSelect => Message::Rules(R::Select(a.into())),
             Intent::RuleAdd => Message::Rules(R::Add),
             Intent::RuleEdit => Message::Rules(R::Edit),

@@ -1306,7 +1306,7 @@ fn mobile_rule_rows_keep_actions_aligned_for_all_sources_and_sizes() {
                     "{id} target is outside width {width}, scale {scale}: {target:?}"
                 );
             }
-            assert!(toggle[0] + toggle[2] <= detail[0] + 1.);
+            assert!(detail[0] + detail[2] <= toggle[0] + 1.);
         }
     }
     let click = |key: &str| {
@@ -1332,6 +1332,7 @@ fn mobile_rule_rows_keep_actions_aligned_for_all_sources_and_sizes() {
     assert_eq!(requests.borrow()[0].1.as_str(), "custom");
     click("rule-switch:subscription");
     assert_eq!(requests.borrow().len(), 1);
+    assert_eq!(probe.get_detail(), 0);
     click("rule-detail:shortcut");
     assert_eq!(probe.get_detail(), 15);
     assert_eq!(probe.get_selected_id().as_str(), "shortcut");

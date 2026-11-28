@@ -1,4 +1,4 @@
-import { PageSurface, Presence } from "../../components/motion.slint";
+import { Motion, PageSurface, Presence } from "../../components/motion.slint";
 import { MobileTypography } from "typography.slint";
 import { Theme, AccentPalette } from "../../theme/palette.slint";
 import { MobileData, MobileView, MobileActions, MobileIntent, ConnectionDetailSnapshot, ConnectionDetailStatus } from "state.slint";
@@ -85,6 +85,7 @@ component MobileEditorActions inherits HorizontalLayout {
 }
 
 export component MobileDetails inherits PageSurface {
+    motion-enabled: Motion.layout-active;
     motion-revision: MobileView.detail;
     property <[DetailItem]> legacy-rows: MobileData.connection-details;
     property <DetailItem> legacy-identity: root.legacy-rows.length > 0

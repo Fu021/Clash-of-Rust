@@ -71,7 +71,6 @@ export component MobileRuleActions inherits MScroll {
             }
         }
         MCard {
-            MSmall { text: @tr("长按左侧手柄拖动，靠近列表上下边缘可连续滚动；跨页可指定位置。"); wrap: word-wrap; }
             HorizontalLayout { spacing: MobileTypography.small-gap;
                 MField { text <=> MobileView.rule-position; placeholder: @tr("目标位置"); enabled: root.editable; }
                 MButton { text: @tr("移动"); width: 72px; horizontal-stretch: 0;

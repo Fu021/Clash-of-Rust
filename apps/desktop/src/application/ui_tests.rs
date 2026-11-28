@@ -2728,6 +2728,56 @@ fn font_popup_changes_the_saved_request_and_rendered_font_at_fractional_scale() 
 }
 
 #[test]
+fn rule_header_groups_override_and_shortcuts_and_the_row_opens_a_drawer() {
+    ui_testing::initialize(950, 700);
+    let mut app = fixture(Page::Rules);
+    app.settings.global_override_enabled = true;
+    let row_key = format!("rule-detail:{}", app.rule_state.rows[0].id);
+    let window = AppWindow::new().unwrap();
+    let data = window.global::<UiData>();
+    let document = window.global::<clash_client_ui::YamlDocument>();
+    document.set_available(true);
+    let mut models = ViewModels::default();
+    models.attach(&data);
+    app.present_slint(&data, &mut models);
+    let events = pointer_events(&window);
+    window.global::<clash_client_ui::Motion>().set_enabled(true);
+    window.show().unwrap();
+    motion_frame(&window, 300);
+    let override_button = target_bounds("rules-global-override");
+    let shortcuts = target_bounds("rule-shortcuts-open");
+    assert!(override_button[0] + override_button[2] <= shortcuts[0]);
+    assert_eq!(override_button[1], shortcuts[1]);
+    click_target(&window, "rules-global-override");
+    assert_eq!(document.get_mode(), 1);
+    document.invoke_close();
+    motion_frame(&window, 300);
+
+    click_target(&window, &row_key);
+    let event = events.borrow_mut().pop().unwrap();
+    assert_eq!(event.0, Intent::RuleSelect);
+    assert_eq!(event.2, "detail");
+    let _ = app.ui_intent(event.0, &event.1, &event.2);
+    app.present_slint(&data, &mut models);
+    assert_eq!(data.get_modal(), 15);
+    assert_eq!(data.get_modal_copy(), app.rule_state.rows[0].raw.as_ref());
+    motion_frame(&window, 50);
+    let entering = target_bounds("rule-details-panel");
+    motion_frame(&window, 250);
+    let settled = target_bounds("rule-details-panel");
+    assert!(entering[0] > settled[0], "{entering:?} -> {settled:?}");
+    click_target(&window, "dialog-dismiss");
+    let event = events.borrow_mut().pop().unwrap();
+    assert_eq!(event.0, Intent::CancelConfirm);
+    let _ = app.ui_intent(event.0, &event.1, &event.2);
+    app.present_slint(&data, &mut models);
+    motion_frame(&window, 250);
+    assert!(!window.get_modal_mounted());
+    assert!(!app.rule_state.dirty());
+    window.hide().unwrap();
+}
+
+#[test]
 fn shortcut_dialog_edits_the_draft_and_keeps_disabled_choices_after_document_release() {
     ui_testing::initialize(950, 700);
     let mut app = fixture(Page::Rules);

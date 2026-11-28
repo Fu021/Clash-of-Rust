@@ -115,16 +115,7 @@ pub fn open_directory(path: &Path) -> Result<()> {
     open(path.as_os_str())
 }
 pub fn open_text_editor(path: &Path) -> Result<()> {
-    ensure!(
-        Command::new("/usr/bin/open")
-            .arg("-t")
-            .arg("--")
-            .arg(path)
-            .status()?
-            .success(),
-        "macOS 无法打开文本编辑器"
-    );
-    Ok(())
+    open(path.as_os_str())
 }
 pub fn open_url(url: &str) -> Result<()> {
     open(std::ffi::OsStr::new(url))

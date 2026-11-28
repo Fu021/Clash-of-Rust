@@ -13,12 +13,25 @@ import { ReportText } from "../../components/report.slint";
 import { IpStatusText } from "../../components/ip-status.slint";
 import { YamlDocument } from "../../components/yaml-document.slint";
 
-component RulesShortcutButton inherits MButton {
-    geometry-key: "rule-shortcuts-open";
-    text: @tr("快捷规则"); compact: true; quiet: true;
-    width: max(80px, MobileTypography.font-size(13) * 4 + 16px); horizontal-stretch: 0;
-    enabled: !MobileData.protected && !MobileData.protection-pending && !MobileData.working;
-    clicked => { MobileView.shortcuts-open = true; }
+component RulesHeaderButton inherits MButton {
+    compact: true; quiet: true;
+    width: max(80px, measure.preferred-width + 16px); horizontal-stretch: 0;
+    measure := MSmall { text: root.text; font-size: MobileTypography.font-size(13); visible: false; }
+}
+
+component RulesHeaderActions inherits HorizontalLayout {
+    alignment: end; cross-axis-alignment: center; spacing: 4px;
+    if YamlDocument.available && MobileData.global-override-enabled: RulesHeaderButton {
+        geometry-key: "rules-global-override";
+        text: @tr("全局覆写");
+        clicked => { YamlDocument.open(1, ""); }
+    }
+    RulesHeaderButton {
+        geometry-key: "rule-shortcuts-open";
+        text: @tr("快捷规则");
+        enabled: !MobileData.protected && !MobileData.protection-pending && !MobileData.working;
+        clicked => { MobileView.shortcuts-open = true; }
+    }
 }
 
 component HeaderStatus inherits VerticalLayout {
@@ -33,7 +46,7 @@ component HeaderStatus inherits VerticalLayout {
             enabled: !MobileView.modal && !MobileView.notice-modal;
             clicked => { MobileView.navigate(8); }
         }
-        if root.rules-shortcut: RulesShortcutButton { }
+        if root.rules-shortcut: RulesHeaderActions { }
         MTag {
             text: MobileData.core-running ? @tr("● 内核运行中") : @tr("○ 内核未运行"); tone: MobileData.core-running ? 1 : 4;
         }
@@ -82,6 +95,11 @@ export component MobileFrame inherits Rectangle {
     property <bool> short: root.height - MobileView.safe-top - MobileView.safe-bottom < 480px;
     property <bool> narrow: root.usable-width < 640px && !root.short;
     property <bool> stacked-header: root.narrow && Theme.text-scale >= 1.25;
+    property <bool> rules-header-actions: MobileView.page == 4 && !root.detail-page && !root.standalone-detail;
+    property <bool> wrap-rules-header-actions: root.rules-header-actions && root.narrow
+        && YamlDocument.available && MobileData.global-override-enabled
+        && (root.usable-width < 370px || root.stacked-header);
+    property <bool> inline-rules-status: root.wrap-rules-header-actions && root.stacked-header && MobileData.protection-health == 0;
     property <bool> expanded: root.usable-width >= 1024px && !root.short;
     property <bool> bottom: root.narrow && MobileView.keyboard-inset == 0px;
     property <length> nav-width: root.narrow ? 0px : root.expanded ? root.sidebar-width : 76px;
@@ -104,7 +122,7 @@ export component MobileFrame inherits Rectangle {
     }
     changed modal-notice => { if self.modal-notice { keys.focus(); } }
     property <string> detail-title: MobileView.detail == 14 ? "Fake-IP"
-        : MobileView.detail == 15 ? @tr("规则操作")
+        : MobileView.detail == 15 ? @tr("规则详情")
         : MobileView.detail == 16 ? @tr("检测详情")
         : MobileView.detail == 1 ? ReportText.section-title(MobileView.claude-section)
         : MobileView.detail == 2 ? @tr("编辑规则")
@@ -213,13 +231,14 @@ export component MobileFrame inherits Rectangle {
                     horizontal-stretch: 0; wrap: word-wrap;
                 }
                 Rectangle { horizontal-stretch: 1; }
-                if !root.stacked-header && !(root.narrow && MobileView.page == 4 && !root.standalone-detail): HeaderStatus {
+                if root.inline-rules-status || (!root.stacked-header && !(root.narrow && MobileView.page == 4 && !root.standalone-detail)): HeaderStatus {
                     compact: root.usable-height < 600px;
-                    rules-shortcut: MobileView.page == 4 && !root.detail-page && !root.standalone-detail;
+                    rules-shortcut: root.rules-header-actions && !root.wrap-rules-header-actions;
                 }
-                if MobileView.page == 4 && !root.detail-page && !root.standalone-detail && (root.narrow || root.stacked-header): RulesShortcutButton { }
+                if root.rules-header-actions && root.narrow && !root.wrap-rules-header-actions: RulesHeaderActions { horizontal-stretch: 0; }
               }
-              if root.stacked-header: HeaderStatus { compact: root.usable-height < 600px; }
+              if root.wrap-rules-header-actions: RulesHeaderActions { }
+              if root.stacked-header && !root.inline-rules-status: HeaderStatus { compact: root.usable-height < 600px; }
             }
         }
         protection-alert := ProtectionAlert {

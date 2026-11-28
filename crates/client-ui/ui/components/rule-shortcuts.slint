@@ -1,5 +1,5 @@
 import { Theme } from "../theme/palette.slint";
-import { Presence } from "motion.slint";
+import { Motion, Presence } from "motion.slint";
 import { GeometryTarget } from "geometry.slint";
 import { PageScroll, Heading, Caption, Label, Panel, ActionButton, Toggle } from "controls.slint";
 
@@ -15,7 +15,7 @@ export component RuleShortcutsDialog inherits Rectangle {
     property <int> focus-index: -1;
     callback toggled(int, bool);
     changed blocked => { if root.blocked { root.opened = false; } }
-    presence := Presence { open: root.opened; }
+    presence := Presence { open: root.opened; motion-enabled: Motion.layout-active; }
     visible: presence.mounted;
     if presence.mounted: Rectangle {
         opacity: presence.progress;

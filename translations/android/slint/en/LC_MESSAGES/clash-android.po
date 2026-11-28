@@ -10,8 +10,8 @@ msgstr "Global override"
 msgid "订阅源码"
 msgstr "Subscription source"
 
-msgid "全局规则来自 merge.yaml，在生成运行配置时合并。"
-msgstr "Global rules from merge.yaml are merged into the runtime configuration."
+msgid "重新打开外部编辑器"
+msgstr "Reopen external editor"
 
 msgid "没有找到匹配内容"
 msgstr "No matches found"
@@ -175,8 +175,8 @@ msgstr "● Core running"
 msgid "○ 内核未运行"
 msgstr "○ Core stopped"
 
-msgid "规则操作"
-msgstr "Rule actions"
+msgid "规则详情"
+msgstr "Rule details"
 
 msgid "检测详情"
 msgstr "Check details"
@@ -790,9 +790,6 @@ msgstr "Enable rule"
 msgid "删除规则"
 msgstr "Delete rule"
 
-msgid "长按左侧手柄拖动，靠近列表上下边缘可连续滚动；跨页可指定位置。"
-msgstr "Hold the handle to reorder. Move near an edge to scroll, or enter a position."
-
 msgid "目标位置"
 msgstr "Position"
 
@@ -1266,9 +1263,6 @@ msgstr "Details"
 
 msgid "错误"
 msgstr "Error"
-
-msgid "长按手柄排序 · 靠近边缘自动滚动"
-msgstr "Hold the handle to reorder · Move near an edge to scroll"
 
 msgid "全部分类"
 msgstr "All categories"

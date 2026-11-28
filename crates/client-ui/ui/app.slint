@@ -196,11 +196,18 @@ export component AppWindow inherits Window {
                         enabled: UiData.modal == 0 && !UiData.notice-modal;
                         clicked => { root.navigate(8); }
                     }
-                    if UiData.page == 4 && YamlDocument.mode == 0: ActionButton {
-                        geometry-key: "rule-shortcuts-open";
-                        text: @tr("快捷规则"); compact: true; quiet: true;
-                        enabled: !UiData.protected && !UiData.protection-pending && !UiData.working;
-                        clicked => { root.rule-shortcuts-open = true; }
+                    if UiData.page == 4 && YamlDocument.mode == 0: HorizontalLayout {
+                        cross-axis-alignment: center; spacing: 4px; horizontal-stretch: 0;
+                        if YamlDocument.available && UiData.global-override-enabled: ActionButton {
+                            text: @tr("全局覆写"); geometry-key: "rules-global-override"; compact: true; quiet: true;
+                            clicked => { YamlDocument.open(1, ""); }
+                        }
+                        ActionButton {
+                            geometry-key: "rule-shortcuts-open";
+                            text: @tr("快捷规则"); compact: true; quiet: true;
+                            enabled: !UiData.protected && !UiData.protection-pending && !UiData.working;
+                            clicked => { root.rule-shortcuts-open = true; }
+                        }
                     }
                     Badge { text: "● " + (UiData.running ? @tr("内核运行中") : UiData.ready ? @tr("内核未启动") : @tr("正在初始化")); tone: UiData.running ? 1 : 4; }
                 }

@@ -2,6 +2,7 @@ import { ScrollView } from "std-widgets.slint";
 import { Theme } from "../theme/palette.slint";
 import { ActionButton, Field, Caption, Panel, Toggle } from "controls.slint";
 import { GeometryTarget } from "geometry.slint";
+import { Entrance, Motion, PageSurface } from "motion.slint";
 
 export struct YamlHighlight { prefix: string, tone: int }
 
@@ -211,7 +212,8 @@ component YamlFindBar inherits VerticalLayout {
     }
 }
 
-export component YamlDocumentPanel inherits Rectangle {
+export component YamlDocumentPanel inherits PageSurface {
+    motion-enabled: Motion.layout-active;
     in property <bool> compact;
     property <bool> editable: YamlDocument.editable && !YamlDocument.writing && !YamlDocument.external-open;
     property <bool> writable: YamlDocument.editable && !YamlDocument.writing;
@@ -379,10 +381,10 @@ export component YamlDocumentPanel inherits Rectangle {
                     clicked => { if root.search-open { YamlDocument.find-open = false; } else { root.open-find(); } }
                 }
                 if YamlDocument.mode == 1 && YamlDocument.external-editor: ActionButton {
-                    text: @tr("外部编辑器"); geometry-key: "yaml-external-editor";
+                    text: YamlDocument.external-open ? @tr("重新打开外部编辑器") : @tr("外部编辑器"); geometry-key: "yaml-external-editor";
                     icon: @image-url("../icons/open-external.svg"); icon-only: true;
                     compact: true; quiet: true; touch-height: root.touch-height;
-                    enabled: root.editable; selected: YamlDocument.external-open;
+                    enabled: root.writable; selected: YamlDocument.external-open;
                     clicked => { YamlDocument.external(); }
                 }
                 ActionButton {
@@ -471,7 +473,9 @@ export component YamlDocumentPanel inherits Rectangle {
             }
           }
           if root.search-open: Panel {
-              x: max(0px, parent.width - self.width - 6px); y: 6px;
+              entrance := Entrance { enabled: Motion.layout-active; }
+              x: max(0px, parent.width - self.width - 6px); y: 6px - (1 - entrance.progress) * 4px;
+              opacity: entrance.progress;
               width: max(0px, min(396px, parent.width - 12px));
               height: find-bar.preferred-height + 12px;
               background: Theme.raised;

@@ -8,15 +8,18 @@ import { CopyButton } from "../components/desktop-copy.slint";
 import { YamlDocument } from "../components/yaml-document.slint";
 export component AppDialog inherits Rectangle {
     property <length> action-width: max(88px, max(copy-measure.preferred-width, max(disconnect-measure.preferred-width, dismiss-measure.preferred-width)) + 28px);
-    copy-measure := Label { visible: false; text: root.kind == 13 ? @tr("复制全文") : @tr("复制详情"); }
+    copy-measure := Label { visible: false; text: root.kind == 15 ? @tr("复制规则原文") : root.kind == 13 ? @tr("复制全文") : @tr("复制详情"); }
     disconnect-measure := Label { visible: false; text: @tr("关闭连接"); }
     dismiss-measure := Label { visible: false; text: root.kind == 14 ? @tr("继续编辑") : (root.opened ? root.source-accept : root.last-accept) == "" ? @tr("关闭") : @tr("取消"); }
     in-out property <int> selected-accent: UiData.accent;
-    presence := Presence { open: root.opened; }
+    presence := Presence { open: root.opened; motion-enabled: root.drawer ? Motion.layout-active : Motion.active; }
     out property <bool> mounted: presence.mounted;
     property <int> source-kind: UiData.modal != 0 ? UiData.modal : YamlDocument.confirm-close ? 14 : 0;
     property <bool> opened: root.source-kind != 0;
     property <int> kind;
+    property <bool> drawer: root.kind == 10 || root.kind == 15;
+    property <bool> rule-writable: root.opened && UiData.rule-types.length > 0
+        && !UiData.working && !UiData.protected && !UiData.protection-pending && !UiData.exiting;
     changed source-kind => {
         if self.source-kind != 0 {
             self.kind = self.source-kind; self.selected-accent = UiData.accent;
@@ -30,6 +33,10 @@ export component AppDialog inherits Rectangle {
     property <string> last-title;
     property <string> last-description;
     property <string> last-accept;
+    property <string> rule-raw: root.source-kind == 15 ? UiData.modal-copy : "";
+    property <string> last-rule-raw;
+    changed rule-raw => { if self.source-kind == 15 { self.last-rule-raw = self.rule-raw; } }
+    changed mounted => { if !self.mounted { self.last-rule-raw = ""; } }
     changed source-title => { if self.opened { self.last-title = self.source-title; } }
     changed source-description => {
         if self.opened {
@@ -37,28 +44,29 @@ export component AppDialog inherits Rectangle {
         }
     }
     changed source-accept => { if self.opened { self.last-accept = self.source-accept; } }
-    init => { self.kind = self.source-kind; self.last-title = self.source-title; self.last-description = self.source-description; self.last-accept = self.source-accept; }
+    init => { self.kind = self.source-kind; self.last-title = self.source-title; self.last-description = self.source-description; self.last-accept = self.source-accept; self.last-rule-raw = self.rule-raw; }
     visible: presence.mounted;
     if presence.mounted: Rectangle {
         opacity: presence.progress;
         property <bool> opened: root.opened;
-        changed opened => { if self.opened && root.kind != 10 { modal-focus.focus(); } }
-        background: root.kind == 10 ? transparent : #00000065;
-        if root.kind != 10: TouchArea { }
-        init => { if root.kind != 10 { modal-focus.focus(); } }
-        modal-focus := FocusScope { enabled: root.opened && root.kind != 10; }
+        changed opened => { if self.opened && !root.drawer { modal-focus.focus(); } }
+        background: root.drawer ? transparent : #00000065;
+        if !root.drawer: TouchArea { }
+        init => { if !root.drawer { modal-focus.focus(); } }
+        modal-focus := FocusScope { enabled: root.opened && !root.drawer; }
         dialog := Panel {
-            border-radius: root.kind == 10 ? 0px : 18px;
+            if root.kind == 15: GeometryTarget { key: "rule-details-panel"; bounds: [dialog.absolute-position.x, dialog.absolute-position.y, dialog.width, dialog.height]; }
+            border-radius: root.drawer ? 0px : 18px;
             drop-shadow-blur: 32px; drop-shadow-offset-y: 8px;
-            x: root.kind == 10 ? parent.width - self.width + (1 - presence.progress) * 32px : (parent.width - self.width) / 2;
-            y: root.kind == 10 ? 44px : (parent.height - self.height) / 2 + (1 - presence.progress) * 8px;
-            width: min(parent.width - 48px, root.kind == 10 ? max(360px * Theme.text-scale, root.action-width * 3 + Theme.dialog-padding * 2 + Theme.content-gap * 2) : root.kind == 11 || root.kind == 13 ? 700px : 600px);
-            height: root.kind == 10 ? parent.height - 44px : min(parent.height - 48px, content.preferred-height);
+            x: root.drawer ? parent.width - self.width + (1 - presence.progress) * 32px : (parent.width - self.width) / 2;
+            y: root.drawer ? 44px : (parent.height - self.height) / 2 + (1 - presence.progress) * 8px;
+            width: min(parent.width - 48px, root.drawer ? max(360px * Theme.text-scale, root.action-width * (root.kind == 10 ? 3 : 2) + Theme.dialog-padding * 2 + Theme.content-gap * 2) : root.kind == 11 || root.kind == 13 ? 700px : 600px);
+            height: root.drawer ? parent.height - 44px : min(parent.height - 48px, content.preferred-height);
             content := VerticalLayout {
                 padding: Theme.dialog-padding; spacing: Theme.dialog-gap;
                 Heading { text: root.opened ? root.source-title : root.last-title; font-size: 20px * Theme.text-scale; }
                 PageScroll {
-                    content-key: root.kind + "/" + root.last-title + "/" + root.last-description;
+                    content-key: root.kind + "/" + root.last-title + "/" + root.last-description + (root.kind == 15 ? "/" + root.last-rule-raw : "");
                     content-y <=> UiData.scroll-dialog;
                     min-height: 0px;
                     preferred-height: body.preferred-height;
@@ -145,6 +153,23 @@ export component AppDialog inherits Rectangle {
                                 if i + 1 < UiData.connection-details.length: Divider { }
                             }
                         }
+                        if root.kind == 15: VerticalLayout {
+                            spacing: Theme.content-gap;
+                            Paragraph { text: root.opened ? root.rule-raw : root.last-rule-raw; }
+                            if UiData.rule-types.length > 0: Divider { }
+                            if UiData.rule-custom: HorizontalLayout { alignment: start; spacing: Theme.content-gap;
+                                ActionButton { modal-control: true; compact: true; text: @tr("编辑"); enabled: root.rule-writable;
+                                    clicked => { UiActions.dispatch(Intent.rule-edit, "", ""); } }
+                                ActionButton { modal-control: true; compact: true; text: UiData.rule-enabled ? @tr("停用") : @tr("启用"); enabled: root.rule-writable;
+                                    clicked => { UiActions.dispatch(Intent.rule-enable, "", ""); } }
+                                ActionButton { modal-control: true; compact: true; text: @tr("删除"); danger: true; enabled: root.rule-writable;
+                                    clicked => { UiActions.dispatch(Intent.rule-delete, "", ""); } }
+                            }
+                            if UiData.rule-types.length > 0: ActionButton { modal-control: true; compact: true; quiet: true; text: @tr("跨页移动到位置…"); enabled: root.rule-writable;
+                                clicked => { UiActions.dispatch(Intent.rule-move-open, "", ""); } }
+                            if UiData.rule-types.length > 0: ActionButton { modal-control: true; compact: true; quiet: true; text: @tr("恢复订阅顺序"); enabled: root.rule-writable;
+                                clicked => { UiActions.dispatch(Intent.rule-restore, "", ""); } }
+                        }
                         if root.kind == 12: VerticalLayout {
                             spacing: Theme.page-gap;
                             for row in [0, 1]: HorizontalLayout { cross-axis-alignment: center; spacing: Theme.page-gap;
@@ -167,9 +192,9 @@ export component AppDialog inherits Rectangle {
                     DiagnosticActions { context: UiData.modal-error; }
                 }
                 HorizontalLayout { cross-axis-alignment: center; spacing: Theme.content-gap;
-                    if root.kind == 10 || root.kind == 11 || root.kind == 13: CopyButton {
+                    if root.drawer || root.kind == 11 || root.kind == 13: CopyButton {
                         geometry-key: "dialog-copy"; width: root.kind == 10 ? root.action-width : max(88px, copy-measure.preferred-width + 28px);
-                        modal-control: true; label: root.kind == 13 ? @tr("复制全文") : @tr("复制详情"); value: UiData.modal-copy;
+                        modal-control: true; label: copy-measure.text; value: UiData.modal-copy;
                         enabled: root.kind != 10 || UiData.connection-details.length > 0;
                     }
                     Rectangle { horizontal-stretch: 1; }

@@ -1334,6 +1334,27 @@ impl App {
             data.set_modal_title(messages::rule_move_title(language).into());
             data.set_modal_accept(messages::rule_move_confirm(language).into());
             data.set_rule_move_position(self.rule_state.move_position.as_str().into());
+        } else if self.page == Page::Rules
+            && self.rule_state.detail_open
+            && let Some(index) = self.rule_state.selected_index()
+        {
+            kind = 15;
+            let rule = &self.rule_state.rows[index];
+            let source = match rule.source {
+                rule_manager::Source::Custom => language.text("自定义", "Custom"),
+                rule_manager::Source::Shortcut => language.text("快捷规则", "Rule shortcuts"),
+                rule_manager::Source::Subscription => language.text("订阅", "Subscription"),
+            };
+            let status = if rule.enabled {
+                language.text("已启用", "Enabled")
+            } else {
+                language.text("已停用", "Disabled")
+            };
+            data.set_modal_title(language.text("规则详情", "Rule details").into());
+            let source_label = language.text("来源：", "Source: ");
+            data.set_modal_description(format!("{source_label}{source} · {status}").into());
+            data.set_modal_copy(rule.raw.as_ref().into());
+            data.set_rule_enabled(rule.enabled);
         } else if let Some(guide) = self.claude.guide {
             match guide {
                 claude_view::Guide::Protection => {

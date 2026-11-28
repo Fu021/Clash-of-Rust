@@ -183,6 +183,38 @@ fn android_yaml_override_uses_a_compact_button_and_confirms_discard() {
 }
 
 #[test]
+fn android_rules_header_groups_yaml_override_with_shortcuts() {
+    let controls = AndroidControls::new(4);
+    let document = controls.window.global::<YamlDocument>();
+    document.set_available(true);
+    let data = controls.window.global::<MobileData>();
+    controls.render();
+    assert!(
+        !controls
+            .targets
+            .borrow()
+            .contains_key("rules-global-override")
+    );
+    data.set_global_override_enabled(true);
+    for width in [320, WIDTH, 1_024] {
+        controls.adapter.set_size(PhysicalSize::new(width, HEIGHT));
+        controls.render();
+        {
+            let targets = controls.targets.borrow();
+            let override_button = &targets["rules-global-override"];
+            let shortcuts = &targets["rule-shortcuts-open"];
+            assert!(override_button[0] + override_button[2] <= shortcuts[0]);
+            assert_eq!(override_button[1], shortcuts[1]);
+            assert!(shortcuts[0] + shortcuts[2] <= width as f32);
+        }
+        controls.click("rules-global-override", None);
+        assert_eq!(document.get_mode(), 1);
+        document.invoke_close();
+        assert_eq!(document.get_mode(), 0);
+    }
+}
+
+#[test]
 fn android_claude_browser_retry_dispatches_only_the_browser_intent() {
     let controls = AndroidControls::new(8);
     let data = controls.window.global::<MobileData>();

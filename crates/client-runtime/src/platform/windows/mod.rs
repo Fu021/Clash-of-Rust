@@ -326,25 +326,31 @@ pub fn open_directory(path: &Path) -> Result<()> {
 
 pub fn open_text_editor(path: &Path) -> Result<()> {
     use std::os::windows::ffi::OsStrExt;
-
-    let wide_path: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
-    // SAFETY: both UTF-16 buffers are NUL-terminated and borrowed only for
-    // this call. The optional window, arguments and directory are null.
-    let result = unsafe {
-        ShellExecuteW(
-            std::ptr::null_mut(),
-            wide("edit").as_ptr(),
-            wide_path.as_ptr(),
-            std::ptr::null(),
-            std::ptr::null(),
-            1,
-        )
+    use windows_sys::Win32::{
+        System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize},
+        UI::Shell::{SEE_MASK_FLAG_NO_UI, SEE_MASK_NOASYNC, SHELLEXECUTEINFOW, ShellExecuteExW},
     };
-    if result <= 32 {
-        std::process::Command::new("notepad.exe")
-            .arg(path)
-            .spawn()
-            .context("无法打开文本编辑器")?;
+
+    let file: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
+    // SAFETY: SHELLEXECUTEINFOW consists of integers and raw pointers, all valid when zeroed.
+    let mut info: SHELLEXECUTEINFOW = unsafe { std::mem::zeroed() };
+    info.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
+    info.fMask = SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI;
+    info.lpFile = file.as_ptr();
+    info.nShow = 1;
+    // SAFETY: the reserved argument is null. COM is initialized on this blocking thread.
+    let initialized =
+        unsafe { CoInitializeEx(std::ptr::null(), COINIT_APARTMENTTHREADED as u32) } >= 0;
+    // SAFETY: info has the required size and its file points to a live NUL-terminated
+    // UTF-16 buffer. The null verb requests the file association's default action.
+    let launched = unsafe { ShellExecuteExW(&mut info) };
+    let error = std::io::Error::last_os_error();
+    if initialized {
+        // SAFETY: balance this thread's successful CoInitializeEx call.
+        unsafe { CoUninitialize() };
+    }
+    if launched == 0 {
+        return Err(error).context("无法使用默认应用打开 YAML 文件");
     }
     Ok(())
 }

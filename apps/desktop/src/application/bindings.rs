@@ -101,6 +101,31 @@ impl Drop for Renderer {
         self.cancel_yaml();
     }
 }
+
+fn launch_external_draft(
+    existing: Option<&std::path::Path>,
+    text: &str,
+    cancellation: &tokio::sync::watch::Receiver<bool>,
+    launch: impl FnOnce(&std::path::Path) -> anyhow::Result<()>,
+) -> anyhow::Result<Option<tempfile::TempDir>> {
+    anyhow::ensure!(!*cancellation.borrow(), "YAML 请求已取消");
+    if let Some(path) = existing {
+        std::fs::metadata(path)?;
+        launch(path)?;
+        return Ok(None);
+    }
+    anyhow::ensure!(
+        text.len() <= overrides::EDIT_LIMIT,
+        "全局覆写不能超过 128 KiB"
+    );
+    let directory = tempfile::Builder::new().prefix("cor-override-").tempdir()?;
+    let path = directory.path().join("merge.yaml");
+    std::fs::write(&path, text)?;
+    anyhow::ensure!(!*cancellation.borrow(), "YAML 请求已取消");
+    launch(&path)?;
+    Ok(Some(directory))
+}
+
 struct DesktopHost {
     app: App,
     worker: Arc<tokio::runtime::Runtime>,
@@ -627,23 +652,16 @@ impl DesktopHost {
                     Action::OpenExternal(text) => {
                         anyhow::ensure!(!transition, "Claude 保护正在切换");
                         engine.lock().await.settings.require_mutable()?;
-                        anyhow::ensure!(
-                            text.len() <= overrides::EDIT_LIMIT,
-                            "全局覆写不能超过 128 KiB"
-                        );
                         let cancel = cancellation.clone();
-                        opened = Some(
-                            tokio::task::spawn_blocking(move || {
-                                let directory =
-                                    tempfile::Builder::new().prefix("cor-override-").tempdir()?;
-                                let path = directory.path().join("merge.yaml");
-                                std::fs::write(&path, text)?;
-                                anyhow::ensure!(!*cancel.borrow(), "YAML 请求已取消");
-                                platform::open_text_editor(&path)?;
-                                Ok::<_, anyhow::Error>(directory)
-                            })
-                            .await??,
-                        );
+                        opened = tokio::task::spawn_blocking(move || {
+                            launch_external_draft(
+                                external_path.as_deref(),
+                                &text,
+                                &cancel,
+                                platform::open_text_editor,
+                            )
+                        })
+                        .await??;
                         Reply::ExternalOpened
                     }
                     Action::PollExternal(previous) => {
@@ -1095,6 +1113,30 @@ pub(super) fn invalidate_window_for_test(window: &slint::Window) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reopening_external_editor_preserves_the_existing_copy() {
+        let (_cancel, cancellation) = tokio::sync::watch::channel(false);
+        let directory = launch_external_draft(None, "# 初稿", &cancellation, |path| {
+            assert_eq!(std::fs::read_to_string(path)?, "# 初稿");
+            Ok(())
+        })
+        .unwrap()
+        .unwrap();
+        let path = directory.path().join("merge.yaml");
+        std::fs::write(&path, "# 外部保存 🐱").unwrap();
+
+        let replacement =
+            launch_external_draft(Some(&path), "# 初稿", &cancellation, |reopened| {
+                assert_eq!(reopened, path);
+                assert_eq!(std::fs::read_to_string(reopened)?, "# 外部保存 🐱");
+                Ok(())
+            })
+            .unwrap();
+        assert!(replacement.is_none());
+        drop(directory);
+        assert!(!path.exists());
+    }
 
     #[test]
     fn desktop_frame_localizes_window_failures_without_changing_original_notices() {

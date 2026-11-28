@@ -115,7 +115,9 @@ fn bind_yaml(window: &AppWindow, output: &mpsc::Sender<UiEvent>) {
         use clash_client_core::config::documents::Action;
         if let Some(window) = weak.upgrade() {
             let document = window.global::<YamlDocument>();
-            if document.get_editable() && !document.get_writing() && !document.get_external_open() {
+            if document.get_editable() && !document.get_writing() {
+                document.set_request_id(document.get_request_id().wrapping_add(1));
+                document.set_external_polling(false);
                 document.set_error(Default::default());
                 document.set_writing(true);
                 send_yaml(
@@ -815,6 +817,57 @@ mod tests {
             script := CopyButton { intent: Intent.claude-copy-script; }
             log := CopyButton { value: "fictional log"; }
         }
+    }
+
+    #[test]
+    fn external_reopen_has_a_new_request_and_ignores_an_in_flight_poll() {
+        use clash_client_core::config::documents::Reply;
+        use slint::platform::{
+            Platform, PlatformError, WindowAdapter,
+            software_renderer::{MinimalSoftwareWindow, RepaintBufferType},
+        };
+
+        struct Headless;
+        impl Platform for Headless {
+            fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, PlatformError> {
+                Ok(MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer))
+            }
+        }
+        slint::platform::set_platform(Box::new(Headless)).unwrap();
+        let window = AppWindow::new().unwrap();
+        let (sender, events) = mpsc::channel();
+        bind_yaml(&window, &sender);
+        let document = window.global::<YamlDocument>();
+        document.set_mode(1);
+        document.set_loaded(true);
+        document.set_external_open(true);
+        document.set_external_polling(true);
+        let poll = document.get_request_id();
+
+        document.invoke_external();
+        let UiEvent::Yaml { id, action } = events.try_recv().unwrap() else {
+            panic!("expected a YAML request");
+        };
+        assert_ne!(poll, id);
+        assert!(action.unwrap().contains("open-external"));
+        assert!(!document.get_external_polling());
+        assert!(document.get_writing());
+
+        yaml_document::respond(
+            &document,
+            poll,
+            Ok(Reply::ExternalUnchanged),
+            yaml_language(&window),
+        );
+        assert!(document.get_writing());
+        yaml_document::respond(
+            &document,
+            id,
+            Ok(Reply::ExternalOpened),
+            yaml_language(&window),
+        );
+        assert!(document.get_external_open());
+        assert!(!document.get_writing());
     }
 
     #[test]
