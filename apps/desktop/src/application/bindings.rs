@@ -24,7 +24,8 @@ enum HostEvent {
         window::Id,
         i32,
         documents::Operation,
-        anyhow::Result<String>,
+        bool,
+        anyhow::Result<documents::Reply>,
         Option<tempfile::TempDir>,
     ),
 }
@@ -53,6 +54,7 @@ struct Renderer {
     reclaim_pending: bool,
     yaml_request: Option<(i32, tokio::sync::watch::Sender<bool>)>,
     yaml_external: Option<tempfile::TempDir>,
+    yaml_poll_failed: bool,
 }
 #[derive(Debug)]
 struct Outbound {
@@ -588,6 +590,7 @@ impl DesktopHost {
         window.cancel_yaml();
         let Some(action) = action else {
             window.yaml_external = None;
+            window.yaml_poll_failed = false;
             return;
         };
         let action = match serde_json::from_str::<documents::Action>(&action) {
@@ -604,7 +607,8 @@ impl DesktopHost {
             .yaml_external
             .as_ref()
             .map(|directory| directory.path().join("merge.yaml"));
-        let operation = action.operation();
+        let polling = matches!(&action, documents::Action::PollExternal(_));
+        let mut operation = action.operation();
         let (cancel, cancellation) = tokio::sync::watch::channel(false);
         window.yaml_request = Some((id, cancel));
         let engine = self.app.engine.clone();
@@ -642,14 +646,45 @@ impl DesktopHost {
                         );
                         Reply::ExternalOpened
                     }
-                    Action::ReadExternal => {
+                    Action::PollExternal(previous) => {
                         anyhow::ensure!(!transition, "Claude 保护正在切换");
                         engine.lock().await.settings.require_mutable()?;
                         let path = external_path.context("尚未打开外部编辑器")?;
-                        Reply::ExternalDraft(
+                        let draft =
                             tokio::task::spawn_blocking(move || overrides::read_draft(&path))
-                                .await??,
-                        )
+                                .await??;
+                        if overrides::revision(&draft) == previous {
+                            Reply::ExternalUnchanged
+                        } else {
+                            Reply::ExternalDraft(draft)
+                        }
+                    }
+                    Action::WriteExternal { mut change, apply } => {
+                        anyhow::ensure!(!transition, "Claude 保护正在切换");
+                        engine.lock().await.settings.require_mutable()?;
+                        let path = external_path.context("尚未打开外部编辑器")?;
+                        operation = documents::Operation::ReadExternal;
+                        change.text =
+                            tokio::task::spawn_blocking(move || overrides::read_draft(&path))
+                                .await??;
+                        operation = if apply {
+                            documents::Operation::Apply
+                        } else {
+                            documents::Operation::Check
+                        };
+                        let mut engine = engine.lock().await;
+                        anyhow::ensure!(!*cancellation.borrow(), "YAML 请求已取消");
+                        if apply {
+                            let revision = overrides::revision(&change.text);
+                            engine.save_global_override(change).await?;
+                            Reply::ExternalSaved {
+                                revision,
+                                closed: false,
+                            }
+                        } else {
+                            engine.check_global_override(change).await?;
+                            Reply::Valid
+                        }
                     }
                     _ => {
                         let mut engine = engine.lock().await;
@@ -669,13 +704,16 @@ impl DesktopHost {
                                 engine.save_global_override(change).await?;
                                 Reply::Saved(revision)
                             }
-                            Action::Source(_) | Action::OpenExternal(_) | Action::ReadExternal => {
+                            Action::Source(_)
+                            | Action::OpenExternal(_)
+                            | Action::PollExternal(_)
+                            | Action::WriteExternal { .. } => {
                                 unreachable!()
                             }
                         }
                     }
                 };
-                Ok::<_, anyhow::Error>(serde_json::to_string(&result)?)
+                Ok::<_, anyhow::Error>(result)
             }
             .await;
             let critical = result
@@ -685,7 +723,9 @@ impl DesktopHost {
                 .copied()
                 .is_some_and(documents::Recovery::critical);
             if critical || !*cancellation.borrow() {
-                let _ = proxy.send_event(HostEvent::Yaml(window_id, id, operation, result, opened));
+                let _ = proxy.send_event(HostEvent::Yaml(
+                    window_id, id, operation, polling, result, opened,
+                ));
             }
         });
     }
@@ -714,7 +754,7 @@ impl DesktopHost {
                 self.sync();
             }
             HostEvent::Ui(id, event) => self.ui_event(id, event),
-            HostEvent::Yaml(window_id, id, operation, result, opened) => {
+            HostEvent::Yaml(window_id, id, operation, polling, mut result, opened) => {
                 let window = self.window.as_mut().filter(|window| {
                     window.id == window_id
                         && window.closing.is_none()
@@ -724,18 +764,49 @@ impl DesktopHost {
                             .is_some_and(|(current, _)| *current == id)
                 });
                 let active = window.is_some();
-                let failure = result
+                let mut failure = result
                     .as_ref()
                     .err()
                     .map(|error| documents::Failure::new(operation, error));
                 if let Some(window) = window {
                     window.yaml_request.take();
+                    if polling {
+                        if failure.is_some() && window.yaml_poll_failed {
+                            failure = None;
+                        }
+                        window.yaml_poll_failed = result.is_err();
+                    }
                     if opened.is_some() {
                         window.yaml_external = opened;
+                        window.yaml_poll_failed = false;
+                    }
+                    if let Ok(documents::Reply::ExternalSaved { revision, closed }) = &mut result
+                        && let Some(directory) = &window.yaml_external
+                        && overrides::read_draft(&directory.path().join("merge.yaml"))
+                            .is_ok_and(|draft| overrides::revision(&draft) == *revision)
+                    {
+                        match std::fs::remove_dir_all(directory.path()) {
+                            Ok(()) => {
+                                *closed = true;
+                                window.yaml_external = None;
+                            }
+                            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                                *closed = true;
+                                window.yaml_external = None;
+                            }
+                            Err(error) => {
+                                failure = Some(documents::Failure::new(
+                                    documents::Operation::CleanupExternal,
+                                    &error.into(),
+                                ));
+                            }
+                        }
                     }
                     window.send(HostPacket::Command(wire::WindowCommand::Yaml {
                         id,
-                        result: result.map_err(|error| format!("{error:#}")),
+                        result: result
+                            .and_then(|reply| Ok(serde_json::to_string(&reply)?))
+                            .map_err(|error| format!("{error:#}")),
                     }));
                 }
                 if let Some(failure) = failure.filter(|failure| active || failure.critical()) {
@@ -887,6 +958,7 @@ impl native::Host for DesktopHost {
                 reclaim_pending: true,
                 yaml_request: None,
                 yaml_external: None,
+                yaml_poll_failed: false,
             })
         })();
         match result {

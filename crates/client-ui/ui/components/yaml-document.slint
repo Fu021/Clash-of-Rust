@@ -1,6 +1,6 @@
 import { ScrollView } from "std-widgets.slint";
 import { Theme } from "../theme/palette.slint";
-import { ActionButton, Field, Label, Caption } from "controls.slint";
+import { ActionButton, Field, Caption, Panel, Toggle } from "controls.slint";
 import { GeometryTarget } from "geometry.slint";
 
 export struct YamlHighlight { prefix: string, tone: int }
@@ -9,6 +9,8 @@ export global YamlDocument {
     in-out property <bool> available;
     in-out property <bool> external-editor;
     in-out property <bool> external-open;
+    in-out property <bool> external-polling;
+    in-out property <bool> external-poll-failed;
     in-out property <string> font-family: "Source Han Sans CN";
     in-out property <bool> protected;
     in-out property <int> mode;
@@ -25,6 +27,7 @@ export global YamlDocument {
     in-out property <bool> confirm-close;
     in-out property <bool> loaded;
     in-out property <bool> applied;
+    in-out property <bool> hide-credentials;
     in-out property <string> error;
     in-out property <string> status;
     out property <int> status-revision;
@@ -38,9 +41,14 @@ export global YamlDocument {
     in-out property <int> anchor: -1;
     in-out property <int> cursor: -1;
     in-out property <int> selection-revision;
-    in-out property <[YamlHighlight]> highlights;
+    in-out property <bool> selection-from-find;
+    in-out property <bool> find-open;
+    in-out property <int> find-from;
+    in-out property <int> find-current;
+    in-out property <int> find-total: -1;
     out property <bool> editable: self.mode == 1 && self.loaded && !self.protected;
 
+    pure callback highlight-lines(text: string, first: int, count: int) -> [YamlHighlight];
     callback load(kind: string, argument: string);
     callback write(apply: bool);
     callback cancel();
@@ -48,11 +56,13 @@ export global YamlDocument {
     callback locate(offset: int);
     callback edit-position(kind: string, argument: string, start: int, end: int);
     callback indent();
-    callback external(reload: bool);
+    callback external();
+    callback poll-external();
+    callback valid-query(query: string) -> bool;
 
     public function report(status: int) {
         self.status = status == 1 ? @tr("校验通过") : status == 2 ? @tr("已应用")
-            : status == 3 ? @tr("没有找到匹配内容") : "";
+            : status == 3 ? @tr("已应用，外部编辑仍打开") : "";
         self.status-revision = self.status-revision + 1;
     }
 
@@ -66,17 +76,20 @@ export global YamlDocument {
         self.mode = 0;
         self.request-id = self.request-id + 1;
         self.cancel();
-        self.text = ""; self.accepted-text = ""; self.profile = ""; self.revision = ""; self.highlights = [];
+        self.text = ""; self.accepted-text = ""; self.profile = ""; self.revision = "";
         self.enabled = false; self.saved-enabled = false; self.dirty = false;
         self.busy = false; self.writing = false; self.loaded = false; self.applied = false; self.confirm-close = false;
-        self.external-open = false;
+        self.external-open = false; self.external-polling = false; self.external-poll-failed = false;
         self.error = ""; self.status = "";
         self.start = 0; self.end = 0; self.total = 0;
         self.first-line = 1; self.line-count = 1; self.line = 1; self.column = 1;
         self.anchor = -1; self.cursor = -1;
+        self.selection-from-find = false; self.find-open = false;
+        self.find-from = 0; self.find-current = 0; self.find-total = -1;
     }
 
     public function request-close() {
+        if self.writing { return; }
         if self.mode == 1 && (self.dirty || self.saved-enabled != self.enabled || self.external-open) {
             self.confirm-close = true;
         } else {
@@ -84,24 +97,109 @@ export global YamlDocument {
         }
     }
 
-    public function open(mode: int, profile: string) {
+    public function back() {
+        if self.confirm-close { self.confirm-close = false; }
+        else if self.find-open { self.find-open = false; }
+        else { self.request-close(); }
+    }
+
+    function open-at(mode: int, profile: string, first-line: int) {
         self.close();
         self.mode = mode;
         self.profile = profile;
         self.request-id = self.request-id + 1;
         self.busy = true;
-        self.load("from", "0");
+        if first-line > 1 { self.load("line", "" + first-line); }
+        else { self.load("from", "0"); }
+    }
+
+    public function open(mode: int, profile: string) {
+        self.open-at(mode, profile, 1);
+    }
+
+    public function toggle-credentials() {
+        if self.mode < 2 { return; }
+        self.hide-credentials = !self.hide-credentials;
+        self.open-at(self.mode, self.profile, self.first-line);
+    }
+}
+
+component YamlFindBar inherits VerticalLayout {
+    in-out property <string> query;
+    in property <int> focus-revision;
+    in property <int> total: YamlDocument.find-total;
+    in property <bool> searching;
+    in property <length> touch-height;
+    callback find(bool);
+    callback close();
+    spacing: 4px;
+    changed focus-revision => { field.focus(); }
+    init => { field.focus(); }
+
+    FocusScope {
+        height: max(Theme.control-height, root.touch-height);
+        focus-on-tab-navigation: false;
+        capture-key-pressed(event) => {
+            if field.has-focus && !field.composing && event.text == "\n" {
+                root.find(event.modifiers.shift);
+                return accept;
+            }
+            return reject;
+        }
+        HorizontalLayout {
+            spacing: 2px;
+            cross-axis-alignment: center;
+            field := Field {
+                focus-id: "yaml-find-query";
+                min-width: 64px;
+                placeholder: @tr("查找");
+                text <=> root.query;
+                accepted => { root.find(false); }
+            }
+            Caption {
+                text: root.searching ? "…" : root.total == 0 ? "0" : root.total > 0
+                    ? YamlDocument.find-current + "/" + root.total : "";
+                accessible-role: text;
+                accessible-label: root.total > 0 ? @tr("第 {} 处，共 {} 处", YamlDocument.find-current, root.total) : "";
+                width: self.preferred-width; horizontal-stretch: 0;
+                color: root.total == 0 ? Theme.secondary : Theme.muted;
+            }
+            ActionButton {
+                text: @tr("上一处匹配"); geometry-key: "yaml-find-previous";
+                icon: @image-url("../icons/chevron-up.svg"); icon-only: true;
+                enabled: root.query != "" && !YamlDocument.busy && !YamlDocument.writing && YamlDocument.loaded;
+                touch-height: root.touch-height; compact: true; quiet: true;
+                clicked => { root.find(true); if root.touch-height == 0px { field.focus(); } }
+            }
+            ActionButton {
+                text: @tr("下一处匹配"); geometry-key: "yaml-find-next";
+                icon: @image-url("../icons/chevron-down.svg"); icon-only: true;
+                enabled: root.query != "" && !YamlDocument.busy && !YamlDocument.writing && YamlDocument.loaded;
+                touch-height: root.touch-height; compact: true; quiet: true;
+                clicked => { root.find(false); if root.touch-height == 0px { field.focus(); } }
+            }
+            ActionButton {
+                text: "×"; accessible-label: @tr("关闭查找"); geometry-key: "yaml-find-close";
+                width: max(32px, root.touch-height); compact: true; quiet: true; touch-height: root.touch-height;
+                clicked => { root.close(); }
+            }
+        }
+    }
+    if root.total == 0 || root.total == -2: Caption {
+        text: root.total == 0 ? @tr("没有找到匹配内容") : @tr("请输入不超过 512 字节的单行搜索词");
+        wrap: word-wrap;
     }
 }
 
 export component YamlDocumentPanel inherits Rectangle {
     in property <bool> compact;
     property <bool> editable: YamlDocument.editable && !YamlDocument.writing && !YamlDocument.external-open;
+    property <bool> writable: YamlDocument.editable && !YamlDocument.writing;
     property <bool> discard <=> YamlDocument.confirm-close;
-    property <bool> reveal;
-    property <bool> search-open;
+    property <bool> search-open: YamlDocument.find-open;
     property <string> search;
-    property <string> jump-line;
+    property <int> search-focus;
+    property <int> search-request: -1;
     property <length> touch-height: root.compact ? 42px : 0px;
     property <length> row-height: max(1px, input.preferred-height / max(1, YamlDocument.line-count));
     property <length> gutter-width: max(36px, gutter-measure.preferred-width + 16px);
@@ -109,6 +207,7 @@ export component YamlDocumentPanel inherits Rectangle {
     clip: true;
     GeometryTarget { key: "yaml-document"; bounds: [root.absolute-position.x, root.absolute-position.y, root.width, root.height]; }
     forward-focus: input;
+    init => { if !root.compact { input.focus(); } }
 
     gutter-measure := Text {
         visible: false;
@@ -118,6 +217,7 @@ export component YamlDocumentPanel inherits Rectangle {
     }
     function navigate(kind: string, argument: string) {
         if YamlDocument.busy || YamlDocument.writing || !YamlDocument.loaded { return; }
+        if kind != "find" && kind != "find-previous" { root.stop-find(); }
         YamlDocument.error = "";
         if YamlDocument.mode == 1 {
             YamlDocument.edit-position(kind, argument, input.anchor-position-byte-offset, input.cursor-position-byte-offset);
@@ -127,106 +227,111 @@ export component YamlDocumentPanel inherits Rectangle {
             YamlDocument.load(kind, argument);
         }
     }
+    function open-find() {
+        YamlDocument.find-open = true;
+        root.search-focus += 1;
+    }
+    function stop-find() {
+        search-timer.stop();
+        if YamlDocument.busy && YamlDocument.request-id == root.search-request {
+            YamlDocument.request-id += 1;
+            YamlDocument.cancel();
+            YamlDocument.busy = false;
+        }
+        root.search-request = -1;
+        YamlDocument.find-total = -1;
+        YamlDocument.find-current = 0;
+    }
+    changed search-open => {
+        if !root.search-open {
+            root.stop-find();
+            root.search = "";
+            if YamlDocument.mode > 0 {
+                if root.compact { keys.focus(); } else { input.focus(); }
+            }
+        }
+    }
+    function queue-find() {
+        root.stop-find();
+        if root.search-open && root.search != "" && YamlDocument.mode == 1 {
+            search-timer.restart();
+        }
+    }
+    changed search => { if root.search-open { root.queue-find(); } }
+    search-timer := Timer {
+        interval: 180ms;
+        triggered => { self.stop(); root.find(false, true); }
+    }
+    function find(previous: bool, initial: bool) {
+        search-timer.stop();
+        if !root.search-open || root.search == "" || YamlDocument.busy || YamlDocument.writing || !YamlDocument.loaded {
+            return;
+        }
+        if !YamlDocument.valid-query(root.search) {
+            YamlDocument.find-total = -2;
+            return;
+        }
+        let start = min(input.anchor-position-byte-offset, input.cursor-position-byte-offset);
+        let end = max(input.anchor-position-byte-offset, input.cursor-position-byte-offset);
+        let first = initial || YamlDocument.find-total < 0;
+        if YamlDocument.mode == 1 {
+            YamlDocument.edit-position(previous ? "find-previous" : first ? "find-initial" : "find", root.search, start, end);
+        } else {
+            YamlDocument.find-from = max(0, previous || first ? start : end);
+            root.search-request = YamlDocument.request-id + 1;
+            root.navigate(previous ? "find-previous" : "find", root.search);
+        }
+    }
     property <int> status-revision: YamlDocument.status-revision;
     changed status-revision => { status-timer.restart(); }
     status-timer := Timer {
         interval: 5s;
         triggered => { self.stop(); YamlDocument.status = ""; }
     }
+    Timer {
+        interval: 1500ms;
+        running: YamlDocument.external-open && YamlDocument.editable && !YamlDocument.writing && !root.discard;
+        triggered => { YamlDocument.poll-external(); }
+    }
 
-    FocusScope {
+    keys := FocusScope {
       width: 100%; height: 100%;
+      focus-on-tab-navigation: false;
       capture-key-pressed(event) => {
-        if event.text == Key.Escape { YamlDocument.request-close(); return accept; }
-        if (event.modifiers.control || event.modifiers.meta) && (event.text == "f" || event.text == "F") {
-            root.search-open = true; return accept;
+        if event.text == Key.Escape {
+            YamlDocument.back();
+            return accept;
+        }
+        if !root.discard && (event.modifiers.control || event.modifiers.meta)
+            && !event.modifiers.alt && (event.text == "f" || event.text == "F") {
+            root.open-find(); return accept;
         }
         return reject;
       }
       VerticalLayout {
-        padding: root.compact ? 8px : 16px; spacing: 6px;
-        HorizontalLayout {
-            spacing: 8px; cross-axis-alignment: center;
-            Label {
-                text: YamlDocument.mode == 1 ? "merge.yaml" : @tr("订阅源码");
-                font-weight: 600; horizontal-stretch: 1;
-            }
-            if !root.discard && !root.reveal: ActionButton {
-                geometry-key: "yaml-document-close"; text: @tr("关闭"); compact: true; touch-height: root.touch-height;
-                clicked => { YamlDocument.request-close(); }
-            }
-        }
+        padding: root.compact ? Theme.content-gap : 0px; spacing: Theme.content-gap;
         if root.discard: VerticalLayout {
-            Caption { text: @tr("放弃未应用的修改？"); wrap: word-wrap; }
+            Caption { text: YamlDocument.external-open ? @tr("放弃未应用的修改并删除外部编辑临时副本？") : @tr("放弃未应用的修改？"); wrap: word-wrap; }
             HorizontalLayout {
                 spacing: 6px;
-                ActionButton { text: @tr("继续编辑"); compact: true; touch-height: root.touch-height; clicked => { root.discard = false; } }
+                ActionButton { text: @tr("继续编辑"); compact: true; quiet: true; touch-height: root.touch-height; clicked => { root.discard = false; } }
                 ActionButton { text: @tr("放弃修改"); compact: true; danger: true; touch-height: root.touch-height; clicked => { YamlDocument.close(); } }
             }
         }
-        if root.reveal: VerticalLayout {
-            Caption { text: @tr("原始 YAML 可能包含节点密码和订阅凭据。"); wrap: word-wrap; }
-            HorizontalLayout {
-                spacing: 6px;
-                ActionButton { text: @tr("取消"); compact: true; touch-height: root.touch-height; clicked => { root.reveal = false; } }
-                ActionButton {
-                    text: @tr("查看完整原文"); compact: true; touch-height: root.touch-height;
-                    clicked => { root.reveal = false; YamlDocument.open(3, YamlDocument.profile); }
-                }
-            }
-        }
-        if YamlDocument.mode >= 2 && !root.reveal: HorizontalLayout {
+        if YamlDocument.mode >= 2: HorizontalLayout {
             spacing: 6px;
             ActionButton {
-                text: @tr("原始 YAML"); compact: true; touch-height: root.touch-height; selected: YamlDocument.mode != 4;
+                text: @tr("原始 YAML"); compact: true; quiet: true; touch-height: root.touch-height; selected: YamlDocument.mode != 4;
                 clicked => { if YamlDocument.mode != 2 || (!YamlDocument.loaded && !YamlDocument.busy) { YamlDocument.open(2, YamlDocument.profile); } }
             }
             ActionButton {
-                text: @tr("运行 YAML"); compact: true; touch-height: root.touch-height; selected: YamlDocument.mode == 4;
+                text: @tr("运行 YAML"); compact: true; quiet: true; touch-height: root.touch-height; selected: YamlDocument.mode == 4;
                 clicked => { if YamlDocument.mode != 4 || (!YamlDocument.loaded && !YamlDocument.busy) { YamlDocument.open(4, YamlDocument.profile); } }
-            }
-            if YamlDocument.mode == 2: ActionButton {
-                text: @tr("显示凭据"); compact: true; touch-height: root.touch-height;
-                clicked => { root.reveal = true; }
-            }
-        }
-        if YamlDocument.mode >= 2 && YamlDocument.loaded: Caption {
-            text: YamlDocument.mode == 4
-                ? (YamlDocument.applied ? @tr("已应用的运行配置") : @tr("按已保存设置生成的预览"))
-                : (YamlDocument.mode == 3 ? @tr("正在显示原文，请谨慎分享") : @tr("已隐藏识别到的凭据"));
-            wrap: word-wrap;
-        }
-        if YamlDocument.mode == 1 && YamlDocument.loaded && !root.discard: HorizontalLayout {
-            spacing: 6px;
-            ActionButton { text: YamlDocument.enabled ? @tr("已启用") : @tr("已停用"); selected: YamlDocument.enabled; enabled: root.editable; compact: true; touch-height: root.touch-height;
-                clicked => { YamlDocument.enabled = !YamlDocument.enabled; }
-            }
-            ActionButton { geometry-key: "yaml-validate"; text: @tr("校验"); enabled: root.editable; compact: true; touch-height: root.touch-height; clicked => { YamlDocument.write(false); } }
-            ActionButton { geometry-key: "yaml-apply"; text: @tr("应用"); enabled: root.editable; compact: true; touch-height: root.touch-height; primary: true; clicked => { YamlDocument.write(true); } }
-            if YamlDocument.external-editor: ActionButton {
-                text: YamlDocument.external-open ? @tr("读回外部修改") : @tr("外部编辑器");
-                enabled: YamlDocument.editable && !YamlDocument.writing;
-                compact: true;
-                geometry-key: "yaml-external-editor";
-                clicked => { YamlDocument.external(YamlDocument.external-open); }
             }
         }
         if YamlDocument.external-open: Caption {
-            text: @tr("请在外部编辑器中保存，再读回草稿。");
+            text: @tr("保存后会自动同步。应用前请保存并关闭外部编辑器。");
             wrap: word-wrap;
-        }
-        if root.search-open && !root.discard && !root.reveal: VerticalLayout {
-            spacing: 4px;
-            HorizontalLayout {
-                spacing: 6px;
-                Field { placeholder: @tr("查找"); text <=> root.search; init => { self.focus(); } accepted => { root.navigate("find", root.search); } }
-                ActionButton { text: @tr("查找下一个"); compact: true; touch-height: root.touch-height; clicked => { root.navigate("find", root.search); } }
-            }
-            HorizontalLayout {
-                spacing: 6px;
-                Field { placeholder: @tr("行号"); text <=> root.jump-line; accepted => { root.navigate("line", root.jump-line); } }
-                ActionButton { text: @tr("跳转"); compact: true; touch-height: root.touch-height; clicked => { root.navigate("line", root.jump-line); } }
-            }
         }
         if YamlDocument.error != "" || YamlDocument.status != "" || YamlDocument.busy || YamlDocument.writing || (YamlDocument.mode == 1 && YamlDocument.protected): Rectangle {
             height: feedback.preferred-height;
@@ -241,9 +346,52 @@ export component YamlDocumentPanel inherits Rectangle {
                 clicked => { YamlDocument.status = ""; }
             }
         }
-        Rectangle {
+        Panel {
+          vertical-stretch: 1; min-height: 0px;
+          VerticalLayout {
+            padding: 1px; spacing: 0px;
+            HorizontalLayout {
+                padding-left: Theme.content-gap; padding-right: 4px;
+                padding-top: 2px; padding-bottom: 2px; spacing: 2px;
+                cross-axis-alignment: center;
+                Caption {
+                    text: YamlDocument.mode == 1 ? "merge.yaml" : YamlDocument.mode == 4
+                        ? (YamlDocument.applied ? @tr("已应用的运行配置") : @tr("按已保存设置生成的预览"))
+                        : (YamlDocument.hide-credentials ? @tr("已隐藏识别到的凭据") : @tr("原始订阅文件"));
+                }
+                if YamlDocument.mode >= 2: ActionButton {
+                    text: YamlDocument.hide-credentials ? @tr("显示凭据") : @tr("隐藏凭据");
+                    geometry-key: "yaml-credentials";
+                    icon: YamlDocument.hide-credentials ? @image-url("../icons/eye-off.svg") : @image-url("../icons/eye.svg");
+                    icon-only: true; quiet: true; compact: true; touch-height: root.touch-height;
+                    selected: YamlDocument.hide-credentials;
+                    clicked => { YamlDocument.toggle-credentials(); }
+                }
+                if !root.discard: ActionButton {
+                    text: @tr("查找"); geometry-key: "yaml-find";
+                    icon: @image-url("../icons/search.svg"); icon-only: true;
+                    compact: true; quiet: true; selected: root.search-open; touch-height: root.touch-height;
+                    enabled: YamlDocument.loaded;
+                    clicked => { if root.search-open { YamlDocument.find-open = false; } else { root.open-find(); } }
+                }
+                if !root.discard && YamlDocument.mode == 1 && YamlDocument.external-editor: ActionButton {
+                    text: @tr("外部编辑器"); geometry-key: "yaml-external-editor";
+                    icon: @image-url("../icons/open-external.svg"); icon-only: true;
+                    compact: true; quiet: true; touch-height: root.touch-height;
+                    enabled: root.editable; selected: YamlDocument.external-open;
+                    clicked => { YamlDocument.external(); }
+                }
+                if !root.discard: ActionButton {
+                    text: @tr("复制"); geometry-key: "yaml-copy";
+                    icon: @image-url("../icons/copy.svg"); icon-only: true;
+                    compact: true; quiet: true; touch-height: root.touch-height; focus-on-click: false;
+                    enabled: YamlDocument.loaded && input.has-selection;
+                    clicked => { input.copy(); }
+                }
+            }
+            Rectangle { height: 1px; background: Theme.subtle-line; }
+          Rectangle {
           clip: true; vertical-stretch: 1; min-height: 0px;
-          background: Theme.surface; border-width: 1px; border-color: Theme.line; border-radius: 8px;
           gutter := Rectangle {
             x: 1px; y: 1px; width: root.gutter-width; height: parent.height - 2px;
             background: Theme.inset; clip: true;
@@ -281,7 +429,7 @@ export component YamlDocumentPanel inherits Rectangle {
                 read-only: !root.editable || root.discard;
                 page-height: scroller.visible-height;
                 text <=> YamlDocument.text;
-                edited => { YamlDocument.edited(); }
+                edited => { YamlDocument.edited(); if root.search-open { root.stop-find(); } }
                 cursor-position-changed(position) => {
                     YamlDocument.locate(self.cursor-position-byte-offset);
                     if position.x + self.x + scroller.content-x < 8px { scroller.content-x = min(0px, 8px - position.x - self.x); }
@@ -297,11 +445,12 @@ export component YamlDocumentPanel inherits Rectangle {
                     return reject;
                 }
             }
-            if YamlDocument.mode >= 2 && !input.has-selection: Rectangle {
+            if YamlDocument.loaded && !input.has-selection: Rectangle {
                 width: scroller.content-width; height: scroller.content-height;
-                for row in gutter.visible-rows: Rectangle {
-                    property <YamlHighlight> item: YamlDocument.highlights[gutter.first-visible + row];
-                    visible: item.prefix != "";
+                property <[YamlHighlight]> rows: YamlDocument.highlight-lines(YamlDocument.text, gutter.first-visible, gutter.visible-rows);
+                for item[row] in self.rows: Rectangle {
+                    visible: item.prefix != "" && (!root.editable || !input.has-focus
+                        || YamlDocument.first-line + gutter.first-visible + row != YamlDocument.line);
                     x: input.x; y: input.y + (gutter.first-visible + row) * root.row-height;
                     width: prefix.preferred-width; height: root.row-height;
                     clip: true;
@@ -311,23 +460,67 @@ export component YamlDocumentPanel inherits Rectangle {
                         font-family: YamlDocument.font-family; font-size: Theme.detail-size;
                         line-height-factor: input.line-height-factor;
                         vertical-alignment: center;
-                        color: parent.item.tone == 1 ? Theme.muted : Theme.accent;
-                        text: parent.item.prefix;
+                        color: item.tone == 1 ? Theme.muted : Theme.accent;
+                        text: item.prefix;
                     }
                 }
             }
           }
+          if root.search-open && !root.discard: Panel {
+              x: max(0px, parent.width - self.width - 6px); y: 6px;
+              width: max(0px, min(396px, parent.width - 12px));
+              height: find-bar.preferred-height + 12px;
+              background: Theme.raised;
+              find-bar := YamlFindBar {
+                  x: 6px; y: 6px; width: max(0px, parent.width - 12px);
+                  height: self.preferred-height;
+                  query <=> root.search;
+                  focus-revision: root.search-focus;
+                  touch-height: root.touch-height;
+                  searching: YamlDocument.busy && YamlDocument.request-id == root.search-request;
+                  find(previous) => { root.find(previous, false); }
+                  close => { YamlDocument.find-open = false; }
+              }
+          }
+          }
+          Rectangle { height: 1px; background: Theme.subtle-line; }
+          HorizontalLayout {
+            padding-left: Theme.content-gap; padding-right: 4px; min-height: 26px;
+            spacing: 4px; cross-axis-alignment: center;
+            Caption { text: @tr("{}:{}", YamlDocument.line, YamlDocument.column); }
+            if YamlDocument.mode == 1 && (YamlDocument.dirty || YamlDocument.enabled != YamlDocument.saved-enabled): Caption {
+                text: @tr("未应用"); color: Theme.warning; width: self.preferred-width; horizontal-stretch: 0;
+            }
+            if YamlDocument.mode >= 2 && (YamlDocument.start > 0 || YamlDocument.end < YamlDocument.total): ActionButton {
+                text: @tr("上一段"); compact: true; quiet: true; touch-height: root.touch-height;
+                enabled: YamlDocument.start > 0 && !YamlDocument.busy;
+                clicked => { root.navigate("before", "" + YamlDocument.start); }
+            }
+            if YamlDocument.mode >= 2 && (YamlDocument.start > 0 || YamlDocument.end < YamlDocument.total): ActionButton {
+                text: @tr("下一段"); compact: true; quiet: true; touch-height: root.touch-height;
+                enabled: YamlDocument.end < YamlDocument.total && !YamlDocument.busy;
+                clicked => { root.navigate("from", "" + YamlDocument.end); }
+            }
+          }
+          }
         }
-        HorizontalLayout {
-            spacing: 5px; cross-axis-alignment: center;
-            if YamlDocument.mode >= 2: ActionButton { text: @tr("上一段"); compact: true; touch-height: root.touch-height; enabled: YamlDocument.start > 0 && !YamlDocument.busy; clicked => { root.navigate("before", "" + YamlDocument.start); } }
-            if YamlDocument.mode >= 2: ActionButton { text: @tr("下一段"); compact: true; touch-height: root.touch-height; enabled: YamlDocument.end < YamlDocument.total && !YamlDocument.busy; clicked => { root.navigate("from", "" + YamlDocument.end); } }
-            ActionButton { text: @tr("查找"); compact: true; touch-height: root.touch-height; selected: root.search-open; clicked => { root.search-open = !root.search-open; } }
-            if YamlDocument.mode == 1 && root.editable: ActionButton { text: @tr("撤销"); compact: true; touch-height: root.touch-height; clicked => { input.undo(); } }
-            if YamlDocument.mode == 1 && root.editable: ActionButton { text: @tr("重做"); compact: true; touch-height: root.touch-height; clicked => { input.redo(); } }
-            Caption {
-                text: @tr("{}:{}", YamlDocument.line, YamlDocument.column) + ((YamlDocument.dirty || YamlDocument.enabled != YamlDocument.saved-enabled) ? " •" : "");
-                horizontal-stretch: 1;
+        if YamlDocument.mode == 1 && YamlDocument.loaded && !root.discard: HorizontalLayout {
+            spacing: Theme.content-gap; cross-axis-alignment: center;
+            Toggle {
+                accessible-role: checkbox; accessible-label: @tr("全局覆写");
+                accessible-checked: YamlDocument.enabled;
+                checked: YamlDocument.enabled; enabled: root.writable;
+                toggled(value) => { YamlDocument.enabled = value; }
+            }
+            Caption { text: YamlDocument.enabled ? @tr("已启用") : @tr("已停用"); }
+            ActionButton {
+                geometry-key: "yaml-validate"; text: @tr("校验"); enabled: root.writable;
+                compact: true; quiet: true; touch-height: root.touch-height; clicked => { YamlDocument.write(false); }
+            }
+            ActionButton {
+                geometry-key: "yaml-apply"; text: YamlDocument.external-open ? @tr("应用并关闭") : @tr("应用");
+                enabled: root.writable;
+                compact: true; primary: true; touch-height: root.touch-height; clicked => { YamlDocument.write(true); }
             }
         }
       }
@@ -335,9 +528,11 @@ export component YamlDocumentPanel inherits Rectangle {
     property <int> selection-revision: YamlDocument.selection-revision;
     changed selection-revision => {
         if YamlDocument.anchor >= 0 && YamlDocument.cursor >= 0 {
-            input.focus();
+            if !YamlDocument.selection-from-find { input.focus(); }
             input.set-selection-offsets(YamlDocument.anchor, YamlDocument.cursor);
         } else {
+            if root.search-open { root.stop-find(); }
+            input.set-selection-offsets(0, 0);
             scroller.content-x = 0px; scroller.content-y = 0px;
         }
     }

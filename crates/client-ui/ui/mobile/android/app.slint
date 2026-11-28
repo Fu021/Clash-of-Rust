@@ -31,7 +31,7 @@ export component AndroidSurface inherits MobileFrame {
     standalone-detail: YamlDocument.mode > 0 || MobileView.detail == 18 || MobileView.detail == 19 || (MobileView.detail == 12 && (MobileView.pending-detail == 18 || MobileView.pending-detail == 19));
     standalone-title: YamlDocument.mode > 0 ? (YamlDocument.mode == 1 ? @tr("全局覆写") : @tr("订阅源码")) : root.policies-visible ? @tr("应用规则") : @tr("应用分流");
     callback document-back();
-    document-back => { YamlDocument.request-close(); }
+    document-back => { YamlDocument.back(); }
     centered-modal: false;
     update-available: AndroidData.update-available;
     update-busy: AndroidData.update-busy;

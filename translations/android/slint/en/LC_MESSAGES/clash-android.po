@@ -28,11 +28,17 @@ msgstr "Discard unapplied changes?"
 msgid "放弃修改"
 msgstr "Discard changes"
 
-msgid "原始 YAML 可能包含节点密码和订阅凭据。"
-msgstr "The original YAML may contain node passwords and subscription credentials."
+msgid "应用并关闭"
+msgstr "Apply and close"
 
-msgid "查看完整原文"
-msgstr "View full source"
+msgid "保存后会自动同步。应用前请保存并关闭外部编辑器。"
+msgstr "Saved changes sync automatically. Save and close the external editor before applying."
+
+msgid "已应用，外部编辑仍打开"
+msgstr "Applied. The external editing session is still open."
+
+msgid "放弃未应用的修改并删除外部编辑临时副本？"
+msgstr "Discard unapplied changes and remove the external editor's temporary copy?"
 
 msgid "原始 YAML"
 msgstr "Original YAML"
@@ -42,6 +48,30 @@ msgstr "Runtime YAML"
 
 msgid "显示凭据"
 msgstr "Show credentials"
+
+msgid "隐藏凭据"
+msgstr "Hide credentials"
+
+msgid "原始订阅文件"
+msgstr "Original subscription file"
+
+msgid "未应用"
+msgstr "Unapplied"
+
+msgid "第 {} 处，共 {} 处"
+msgstr "Match {} of {}"
+
+msgid "上一处匹配"
+msgstr "Previous match"
+
+msgid "下一处匹配"
+msgstr "Next match"
+
+msgid "关闭查找"
+msgstr "Close find"
+
+msgid "请输入不超过 512 字节的单行搜索词"
+msgstr "Enter a single-line search term of at most 512 bytes."
 
 msgid "已应用的运行配置"
 msgstr "Applied runtime configuration"
@@ -67,15 +97,6 @@ msgstr "Working…"
 msgid "查找"
 msgstr "Find"
 
-msgid "查找下一个"
-msgstr "Find next"
-
-msgid "行号"
-msgstr "Line number"
-
-msgid "跳转"
-msgstr "Go to line"
-
 msgid "Claude 保护期间只读"
 msgstr "Read-only while Claude protection is active"
 
@@ -87,12 +108,6 @@ msgstr "Previous"
 
 msgid "下一段"
 msgstr "Next"
-
-msgid "撤销"
-msgstr "Undo"
-
-msgid "重做"
-msgstr "Redo"
 
 msgid "Claude 保护异常"
 msgstr "Claude protection error"

@@ -26,13 +26,26 @@ pub enum Position {
     From(usize),
     Before(usize),
     Line(usize),
-    Find { query: String, from: usize },
+    Find {
+        query: String,
+        from: usize,
+        #[serde(default)]
+        previous: bool,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+pub struct Matches {
+    pub current: usize,
+    pub total: usize,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
 pub struct Request {
     pub profile: String,
     pub view: View,
+    #[serde(default)]
+    pub show_credentials: bool,
     pub position: Position,
     pub revision: Option<String>,
 }
@@ -58,6 +71,7 @@ pub struct Page {
     pub applied: bool,
     pub selected: Option<(usize, usize)>,
     pub match_missing: bool,
+    pub matches: Option<Matches>,
 }
 
 pub struct Input {
@@ -115,7 +129,7 @@ pub fn build_page(
 ) -> Result<Page> {
     ensure!(!cancelled(), "源码请求已取消");
     ensure!(raw.len() <= super::RUNTIME_LIMIT, "运行 YAML 超过大小限制");
-    let redacted = if matches!(request.view, View::OriginalRevealed) {
+    let redacted = if request.show_credentials || matches!(request.view, View::OriginalRevealed) {
         mask::redact_controller(raw, controller_secret, &cancelled)?
     } else {
         mask::redact(raw, controller_secret, &cancelled)?
@@ -134,7 +148,7 @@ pub fn build_page(
             .is_none_or(|saved| saved == &revision),
         "源码已变化，请重新打开"
     );
-    let (start, end, match_start, match_missing) = bounds(text, &request.position)?;
+    let (start, end, match_start, matches) = bounds(text, &request.position, &cancelled)?;
     let selected = match_start.map(|(first, last)| (first - start, last - start));
     let first_line = text[..start].bytes().filter(|byte| *byte == b'\n').count() + 1;
     Ok(Page {
@@ -146,19 +160,62 @@ pub fn build_page(
         revision,
         applied,
         selected,
-        match_missing,
+        match_missing: matches.is_some_and(|result| result.total == 0),
+        matches,
     })
 }
 
-type Bounds = (usize, usize, Option<(usize, usize)>, bool);
+pub fn validate_query(query: &str) -> Result<()> {
+    ensure!(
+        !query.is_empty() && query.len() <= SEARCH_BYTES && !query.contains(['\r', '\n']),
+        "请输入不超过 512 字节的单行搜索词"
+    );
+    Ok(())
+}
 
-fn bounds(text: &str, position: &Position) -> Result<Bounds> {
+pub fn find_match(
+    text: &str,
+    query: &str,
+    from: usize,
+    previous: bool,
+    cancelled: impl Fn() -> bool,
+) -> Result<(Option<(usize, usize)>, Matches)> {
+    validate_query(query)?;
+    let mut summary = Matches::default();
+    let mut first = None;
+    let mut last = None;
+    let mut nearest = None;
+    for (start, matched) in text.match_indices(query) {
+        if summary.total.is_multiple_of(4096) {
+            ensure!(!cancelled(), "源码请求已取消");
+        }
+        summary.total += 1;
+        let result = ((start, start + matched.len()), summary.total);
+        first = first.or(Some(result));
+        last = Some(result);
+        if previous && start < from || !previous && start >= from && nearest.is_none() {
+            nearest = Some(result);
+        }
+    }
+    ensure!(!cancelled(), "源码请求已取消");
+    let selected = nearest.or(if previous { last } else { first });
+    if let Some((range, current)) = selected {
+        summary.current = current;
+        Ok((Some(range), summary))
+    } else {
+        Ok((None, summary))
+    }
+}
+
+type Bounds = (usize, usize, Option<(usize, usize)>, Option<Matches>);
+
+fn bounds(text: &str, position: &Position, cancelled: impl Fn() -> bool) -> Result<Bounds> {
     let offset = |value| {
         ensure!(text.is_char_boundary(value), "源码位置无效");
         Ok::<_, anyhow::Error>(value)
     };
-    let (start, selected, missing) = match position {
-        Position::From(start) => (offset(*start)?, None, false),
+    let (start, selected, matches) = match position {
+        Position::From(start) => (offset(*start)?, None, None),
         Position::Before(end) => {
             let end = offset(*end)?;
             let minimum = text.ceil_char_boundary(end.saturating_sub(PAGE_BYTES));
@@ -173,7 +230,7 @@ fn bounds(text: &str, position: &Position) -> Result<Bounds> {
                         .filter(|(index, _)| minimum + index + 1 != end)
                 })
                 .map_or(minimum, |(index, _)| minimum + index + 1);
-            return Ok((start, end, None, false));
+            return Ok((start, end, None, None));
         }
         Position::Line(line) => {
             ensure!(*line > 0, "行号必须大于零");
@@ -185,27 +242,26 @@ fn bounds(text: &str, position: &Position) -> Result<Bounds> {
                     .map(|(index, _)| index + 1)
                     .context("行号超出源码范围")?
             };
-            (start, None, false)
+            (start, None, None)
         }
-        Position::Find { query, from } => {
-            ensure!(
-                !query.is_empty() && query.len() <= SEARCH_BYTES && !query.contains(['\r', '\n']),
-                "请输入不超过 512 字节的单行搜索词"
-            );
+        Position::Find {
+            query,
+            from,
+            previous,
+        } => {
             let from = offset(*from)?;
-            match text[from..]
-                .find(query)
-                .map(|index| from + index)
-                .or_else(|| text.find(query))
-            {
-                Some(first) => {
+            let (selected, matches) = find_match(text, query, from, *previous, cancelled)?;
+            match selected {
+                Some((first, last)) => {
                     let minimum = text.ceil_char_boundary(first.saturating_sub(PAGE_BYTES / 2));
                     let start = text[minimum..first]
-                        .rfind('\n')
-                        .map_or(minimum, |index| minimum + index + 1);
-                    (start, Some((first, first + query.len())), false)
+                        .rmatch_indices('\n')
+                        .take(7)
+                        .last()
+                        .map_or(minimum, |(index, _)| minimum + index + 1);
+                    (start, Some((first, last)), Some(matches))
                 }
-                None => (from, None, true),
+                None => return Ok((from, from, None, Some(matches))),
             }
         }
     };
@@ -222,7 +278,7 @@ fn bounds(text: &str, position: &Position) -> Result<Bounds> {
         maximum
     };
     let end = end.max(selected.map_or(0, |(_, last)| last));
-    Ok((start, end, selected, missing))
+    Ok((start, end, selected, matches))
 }
 
 #[cfg(test)]
@@ -233,6 +289,7 @@ mod tests {
         Request {
             profile: "fixture".into(),
             view,
+            show_credentials: false,
             position,
             revision: None,
         }
@@ -275,15 +332,19 @@ rules: [MATCH,DIRECT]
         for visible in ["# 中文🙂", "name: safe", "# keep", "rules: [MATCH,DIRECT]"] {
             assert!(page.text.contains(visible), "{visible}");
         }
-        let original = build_page(
-            raw,
-            "control-generated-secret",
-            &request(View::OriginalRevealed, Position::From(0)),
-            false,
-            || false,
-        )
-        .unwrap();
-        assert_eq!(original.text, raw.replace("control-generated-secret", MASK));
+        for view in [View::OriginalRevealed, View::Runtime] {
+            let mut revealed_request = request(view, Position::From(0));
+            revealed_request.show_credentials = matches!(view, View::Runtime);
+            let revealed = build_page(
+                raw,
+                "control-generated-secret",
+                &revealed_request,
+                matches!(view, View::Runtime),
+                || false,
+            )
+            .unwrap();
+            assert_eq!(revealed.text, raw.replace("control-generated-secret", MASK));
+        }
     }
 
     #[test]
@@ -315,14 +376,115 @@ rules: [MATCH,DIRECT]
             Position::Find {
                 query: "rules".into(),
                 from: following.end,
+                previous: false,
             },
         );
         search.revision = Some(first.revision);
         let found = build_page(&raw, "", &search, false, || false).unwrap();
         let (start, end) = found.selected.unwrap();
         assert_eq!(&found.text[start..end], "rules");
+        assert_eq!(
+            found.matches,
+            Some(Matches {
+                current: 1,
+                total: 1
+            })
+        );
         assert!(build_page("proxies: []", "", &search, false, || false).is_err());
         assert!(build_page(&raw, "", &search, false, || true).is_err());
+    }
+
+    #[test]
+    fn find_counts_utf8_matches_and_wraps_in_both_directions() {
+        let text = "中文🙂\n中文🙂\n中文🙂";
+        for (from, previous, current) in [
+            (0, false, 1),
+            (10, false, 2),
+            (11, true, 1),
+            (0, true, 3),
+            (32, false, 1),
+        ] {
+            let (selected, count) = find_match(text, "中文🙂", from, previous, || false).unwrap();
+            assert_eq!(count, Matches { current, total: 3 });
+            assert_eq!(
+                selected,
+                Some(((current - 1) * 11, (current - 1) * 11 + 10))
+            );
+        }
+        assert_eq!(
+            find_match(text, "不存在", 0, false, || false).unwrap(),
+            (None, Matches::default())
+        );
+        assert!(find_match(text, "\n", 0, false, || false).is_err());
+        assert!(find_match(text, "中文", 0, false, || true).is_err());
+    }
+
+    #[test]
+    fn source_find_counts_the_full_document_without_exposing_masked_matches() {
+        let text = format!(
+            "name: fixture\n{}name: fixture\npassword: fixture\n",
+            "# padding\n".repeat(PAGE_LINES + 5)
+        );
+        let find = |query: &str, from, previous| Position::Find {
+            query: query.into(),
+            from,
+            previous,
+        };
+        let page = |position| {
+            build_page(&text, "", &request(View::Original, position), false, || {
+                false
+            })
+            .unwrap()
+        };
+        let last = page(find("fixture", 0, true));
+        assert_eq!(
+            last.matches,
+            Some(Matches {
+                current: 2,
+                total: 2
+            })
+        );
+        assert!(last.first_line >= PAGE_LINES);
+        let (start, end) = last.selected.unwrap();
+        assert_eq!(&last.text[start..end], "fixture");
+        let wrapped = page(find("fixture", last.start + end, false));
+        assert_eq!(wrapped.first_line, 1);
+        assert_eq!(
+            wrapped.matches,
+            Some(Matches {
+                current: 1,
+                total: 2
+            })
+        );
+        let miss = page(find("password: fixture", 0, false));
+        assert_eq!(miss.matches, Some(Matches::default()));
+        assert!(miss.text.is_empty());
+    }
+
+    #[test]
+    fn source_visibility_uses_a_new_revision_and_old_requests_remain_masked() {
+        let mut request: Request = serde_json::from_value(serde_json::json!({
+            "profile": "fixture",
+            "view": "runtime",
+            "position": {"find": {"query": "fictional", "from": 0}},
+            "revision": null
+        }))
+        .unwrap();
+        let raw = "password: fictional\nsecret: control-generated-secret\n";
+        let build = |request: &Request| {
+            build_page(raw, "control-generated-secret", request, true, || false)
+        };
+        assert!(!request.show_credentials);
+        let hidden = build(&request).unwrap();
+        assert!(hidden.match_missing);
+        request.show_credentials = true;
+        request.revision = Some(hidden.revision);
+        assert!(build(&request).is_err());
+        request.revision = None;
+        let shown = build(&request).unwrap();
+        assert!(!shown.match_missing);
+        assert!(!shown.text.contains("control-generated-secret"));
+        assert!(shown.applied);
     }
 
     #[test]

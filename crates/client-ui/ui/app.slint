@@ -161,13 +161,24 @@ export component AppWindow inherits Window {
                 height: max(52px, header.preferred-height + 12px);
                 Rectangle { y: parent.height - 1px; width: parent.width; height: 1px; background: Theme.subtle-line; }
                 header := HorizontalLayout { cross-axis-alignment: center; spacing: Theme.page-gap;
-                    Label { text: root.page-title; font-size: Theme.body-size; font-weight: 600; horizontal-stretch: 0; }
+                    if YamlDocument.mode > 0: ActionButton {
+                        text: @tr("返回"); geometry-key: "yaml-document-close";
+                        icon: @image-url("icons/chevron-left.svg");
+                        icon-only: true; quiet: true; compact: true;
+                        enabled: !YamlDocument.writing;
+                        clicked => { YamlDocument.request-close(); }
+                    }
+                    Label {
+                        text: YamlDocument.mode == 1 ? @tr("全局覆写")
+                            : YamlDocument.mode >= 2 ? @tr("订阅源码") : root.page-title;
+                        font-size: Theme.body-size; font-weight: 600; horizontal-stretch: 0;
+                    }
                     if UiData.page == 9 && !UiData.fake-ip-editor && root.settings-header-navigation: SettingsNavigation {
                         active-section: root.settings-active-section;
                         chosen(index) => { root.settings-navigation-request = index; }
                     }
                     Rectangle { horizontal-stretch: 1; }
-                    if UiData.page == 2: ActionButton { text: @tr("打开目录"); quiet: true; compact: true; enabled: UiData.ready; clicked => { UiActions.dispatch(Intent.open-profiles, "", ""); } }
+                    if UiData.page == 2 && YamlDocument.mode == 0: ActionButton { text: @tr("打开目录"); quiet: true; compact: true; enabled: UiData.ready; clicked => { UiActions.dispatch(Intent.open-profiles, "", ""); } }
                     if UiData.page == 3: ActionButton { text: @tr("关闭全部"); quiet: true; compact: true; danger: true; enabled: UiData.running && !UiData.working && !UiData.protected && !UiData.protection-pending; clicked => { UiActions.dispatch(Intent.close-all, "", ""); } }
                     if UiData.page == 5: ActionButton { text: @tr("导出"); quiet: true; compact: true; enabled: UiData.ready && !UiData.working; clicked => { UiActions.dispatch(Intent.export-logs, "", ""); } }
                     if UiData.page == 5: ActionButton { text: @tr("清空"); quiet: true; compact: true; enabled: UiData.ready && !UiData.working; clicked => { UiActions.dispatch(Intent.clear-logs, "", ""); } }
@@ -179,7 +190,7 @@ export component AppWindow inherits Window {
                         enabled: UiData.modal == 0 && !UiData.notice-modal;
                         clicked => { UiActions.dispatch(Intent.navigate, "8", ""); }
                     }
-                    if UiData.page == 4: ActionButton {
+                    if UiData.page == 4 && YamlDocument.mode == 0: ActionButton {
                         geometry-key: "rule-shortcuts-open";
                         text: @tr("快捷规则"); compact: true; quiet: true;
                         enabled: !UiData.protected && !UiData.protection-pending && !UiData.working;

@@ -547,6 +547,7 @@ mod tests {
                 request: Request {
                     profile: id.clone(),
                     view: View::Original,
+                    show_credentials: false,
                     position: Position::From(0),
                     revision: None,
                 },

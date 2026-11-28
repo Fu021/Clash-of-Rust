@@ -19,7 +19,8 @@
 | `yaml_override_check_failed` | 校验草稿及引用 |
 | `yaml_override_apply_failed` | 校验、保存或重载全局覆写 |
 | `yaml_external_open_failed` | 创建临时副本或启动外部编辑器 |
-| `yaml_external_read_failed` | 从外部编辑器读回草稿 |
+| `yaml_external_read_failed` | 外部编辑草稿的自动同步，或校验、应用前重新读取 |
+| `yaml_external_cleanup_failed` | 覆写已应用，外部编辑器临时副本清理失败 |
 
 进入回滚的应用错误用 `failed_stage` 标记触发阶段，`reload` 表示内核重载，`health_check` 表示桌面端重载后的内核健康检查，`commit` 表示配置写入。`recovery` 记录实际回滚结果。`restored` 表示旧状态已恢复，`files_failed` 表示磁盘配置恢复失败，`runtime_failed` 表示原运行配置恢复失败，`files_and_runtime_failed` 表示两项均失败。后三项是严重错误。桌面附加 CLI 后台时，本机控制连接也保留这些字段和可取得的 `io_kind`、`os_code`。
 

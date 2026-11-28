@@ -85,6 +85,10 @@ fn bind_yaml(window: &AppWindow, output: &mpsc::Sender<UiEvent>) {
     document.set_available(true);
     document.set_font_family(clash_client_ui::fonts::editor_font());
     document.set_external_editor(true);
+    document.on_highlight_lines(yaml_document::highlight_lines);
+    document.on_valid_query(|query| {
+        clash_client_core::config::source_view::validate_query(&query).is_ok()
+    });
     let weak = window.as_weak();
     let sender = output.clone();
     document.on_load(move |kind, argument| {
@@ -107,22 +111,41 @@ fn bind_yaml(window: &AppWindow, output: &mpsc::Sender<UiEvent>) {
     });
     let weak = window.as_weak();
     let sender = output.clone();
-    document.on_external(move |reload| {
+    document.on_external(move || {
         use clash_client_core::config::documents::Action;
         if let Some(window) = weak.upgrade() {
             let document = window.global::<YamlDocument>();
-            if document.get_editable() && !document.get_writing() {
+            if document.get_editable() && !document.get_writing() && !document.get_external_open() {
                 document.set_error(Default::default());
                 document.set_status(Default::default());
                 document.set_writing(true);
                 send_yaml(
                     &window,
                     &sender,
-                    Ok(if reload {
-                        Action::ReadExternal
-                    } else {
-                        Action::OpenExternal(document.get_text().to_string())
-                    }),
+                    Ok(Action::OpenExternal(document.get_text().to_string())),
+                );
+            }
+        }
+    });
+    let weak = window.as_weak();
+    let sender = output.clone();
+    document.on_poll_external(move || {
+        use clash_client_core::config::{documents::Action, overrides};
+        if let Some(window) = weak.upgrade() {
+            let document = window.global::<YamlDocument>();
+            if document.get_editable()
+                && document.get_external_open()
+                && !document.get_writing()
+                && !document.get_external_polling()
+            {
+                document.set_request_id(document.get_request_id().wrapping_add(1));
+                document.set_external_polling(true);
+                send_yaml(
+                    &window,
+                    &sender,
+                    Ok(Action::PollExternal(overrides::revision(
+                        &document.get_text(),
+                    ))),
                 );
             }
         }

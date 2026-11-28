@@ -171,6 +171,8 @@ export component ActionButton inherits Rectangle {
     if UiGeometry.enabled && root.geometry-key != "": GeometryTarget { key: root.geometry-key; bounds: [root.absolute-position.x, root.absolute-position.y, root.width, root.height]; }
     in property <bool> modal-control: false;
     in property <string> text;
+    in property <image> icon;
+    in property <bool> icon-only;
     in property <bool> primary: false;
     in property <bool> selected: false;
     in property <bool> danger: false;
@@ -182,6 +184,7 @@ export component ActionButton inherits Rectangle {
     in property <bool> notice-control;
     in property <bool> quiet;
     in property <bool> compact;
+    in property <bool> focus-on-click: true;
     in property <length> touch-height;
     in property <color> text-color: root.primary ? #ffffff : root.danger ? Theme.danger : root.success ? Theme.success : root.selected ? Theme.accent : Theme.ink;
     property <bool> interactive: root.enabled && !root.busy && (!ControlAccess.modal-blocked() || root.modal-control) && (!ControlAccess.notice-blocked() || root.notice-control);
@@ -195,7 +198,8 @@ export component ActionButton inherits Rectangle {
     accessible-label: root.text;
     forward-focus: key-scope;
     height: max(root.touch-height, root.compact ? max(28px, Theme.detail-size * 1.5 + 8px) : Theme.control-height);
-    width: max(root.compact ? 42px : 68px, button-label.preferred-width + (root.compact ? 16px : 28px) + (root.dropdown ? 20px : 0px));
+    width: root.icon-only ? max(root.height, 32px)
+        : max(root.compact ? 42px : 68px, button-label.preferred-width + (root.compact ? 16px : 28px) + (root.dropdown ? 20px : 0px));
     vertical-stretch: 0;
     horizontal-stretch: 0;
     border-radius: 8px;
@@ -208,6 +212,7 @@ export component ActionButton inherits Rectangle {
     opacity: root.enabled || root.busy ? 1 : 0.5;
     animate background, border-color, opacity { duration: Motion.fast; enabled: Motion.active; }
     button-label := Label {
+        visible: !root.icon-only;
         y: root.press-offset;
         width: parent.width - (root.dropdown ? 24px : 0px);
         height: parent.height;
@@ -215,6 +220,12 @@ export component ActionButton inherits Rectangle {
         horizontal-alignment: center;
         color: root.text-color;
         font-size: root.compact ? Theme.detail-size : Theme.body-size;
+    }
+    if root.icon-only: Image {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2 + root.press-offset;
+        width: 16px; height: 16px;
+        source: root.icon; colorize: root.text-color;
     }
     if root.dropdown: Chevron {
         x: parent.width - 24px;
@@ -237,7 +248,11 @@ export component ActionButton inherits Rectangle {
     area := TouchArea {
         enabled: root.interactive;
         mouse-cursor: pointer;
-        clicked => { root.keyboard-focus = false; key-scope.focus(); root.clicked(); }
+        clicked => {
+            root.keyboard-focus = false;
+            if root.focus-on-click { key-scope.focus(); }
+            root.clicked();
+        }
     }
 }
 
@@ -290,6 +305,8 @@ export component Field inherits Rectangle {
     in property <string> placeholder;
     in-out property <string> text;
     out property <bool> placeholder-visible: input.text == "" && input.preedit-text == "";
+    out property <bool> composing: input.preedit-text != "";
+    out property <bool> has-focus: input.has-focus;
     in property <bool> secret: false;
     in property <string> focus-id;
     GeometryTarget { key: root.focus-id == "" ? "" : "field:" + root.focus-id; bounds: [root.absolute-position.x, root.absolute-position.y, root.width, root.height]; }

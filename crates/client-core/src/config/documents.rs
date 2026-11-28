@@ -10,7 +10,11 @@ pub enum Action {
     Check(overrides::Change),
     Apply(overrides::Change),
     OpenExternal(String),
-    ReadExternal,
+    PollExternal(String),
+    WriteExternal {
+        change: overrides::Change,
+        apply: bool,
+    },
 }
 
 impl Action {
@@ -31,7 +35,9 @@ impl Action {
             Self::Check(_) => Operation::Check,
             Self::Apply(_) => Operation::Apply,
             Self::OpenExternal(_) => Operation::OpenExternal,
-            Self::ReadExternal => Operation::ReadExternal,
+            Self::PollExternal(_) => Operation::ReadExternal,
+            Self::WriteExternal { apply: true, .. } => Operation::Apply,
+            Self::WriteExternal { apply: false, .. } => Operation::Check,
         }
     }
 }
@@ -46,6 +52,7 @@ pub enum Operation {
     Apply,
     OpenExternal,
     ReadExternal,
+    CleanupExternal,
 }
 
 impl Operation {
@@ -59,6 +66,7 @@ impl Operation {
             Self::Apply => "yaml_override_apply_failed",
             Self::OpenExternal => "yaml_external_open_failed",
             Self::ReadExternal => "yaml_external_read_failed",
+            Self::CleanupExternal => "yaml_external_cleanup_failed",
         }
     }
 
@@ -71,7 +79,11 @@ impl Operation {
             Self::Check => ("覆写校验失败", "Override validation failed"),
             Self::Apply => ("无法应用全局覆写", "Could not apply the global override"),
             Self::OpenExternal => ("无法启动外部编辑器", "Could not launch the external editor"),
-            Self::ReadExternal => ("无法读回外部修改", "Could not load external edits"),
+            Self::ReadExternal => ("无法同步外部修改", "Could not sync external edits"),
+            Self::CleanupExternal => (
+                "已应用覆写，但无法清理外部编辑器临时文件",
+                "The override was applied, but the external editor's temporary file could not be removed.",
+            ),
         };
         language.text(chinese, english)
     }
@@ -332,6 +344,8 @@ pub enum Reply {
     Saved(String),
     ExternalOpened,
     ExternalDraft(String),
+    ExternalUnchanged,
+    ExternalSaved { revision: String, closed: bool },
 }
 
 #[cfg(test)]

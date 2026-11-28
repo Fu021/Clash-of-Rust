@@ -115,6 +115,8 @@ pub(super) fn bind(ui: &AndroidWindow) -> mpsc::Receiver<Request> {
     let pending = Rc::new(Pending::default());
     let data = ui.global::<YamlDocument>();
     data.set_font_family(fonts::editor_font());
+    data.on_highlight_lines(document::highlight_lines);
+    data.on_valid_query(|query| yaml_core::config::source_view::validate_query(&query).is_ok());
     let weak = ui.as_weak();
     let load_sender = sender.clone();
     let load_pending = pending.clone();
@@ -221,7 +223,7 @@ pub(super) fn run(
                 .save_global_override(change)
                 .map(|()| Reply::Saved(revision))
         }
-        Action::OpenExternal(_) | Action::ReadExternal => {
+        Action::OpenExternal(_) | Action::PollExternal(_) | Action::WriteExternal { .. } => {
             Err(anyhow::anyhow!("当前平台不支持外部编辑器"))
         }
     };

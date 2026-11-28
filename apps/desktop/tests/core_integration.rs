@@ -75,6 +75,191 @@ fn free_port() -> u16 {
     panic!("could not allocate a port available for both TCP and UDP: {last_error:?}")
 }
 
+#[tokio::test]
+#[ignore = "Requires official Mihomo resources and a disposable loopback network"]
+async fn http_rule_provider_survives_subscription_refresh() {
+    use clash_of_rust::{
+        config::{
+            overrides::Change,
+            source_view::{Position, Request, View},
+        },
+        engine::ProxyMode,
+        rule_manager::{CustomRule, ProfileRules},
+    };
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::at(directory.path().join("data")).unwrap();
+    store
+        .save_settings(&Settings {
+            controller_port: free_port(),
+            mixed_port: free_port(),
+            proxy_mode: ProxyMode::Off,
+            ..Settings::default()
+        })
+        .unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let old_source = "proxies: []\nrules: ['DOMAIN,old.fixture.invalid,REJECT', 'MATCH,DIRECT']\n";
+    let new_source = "proxies: []\nrules: ['DOMAIN,new.fixture.invalid,REJECT', 'MATCH,DIRECT']\n";
+    let updated = Arc::new(AtomicBool::new(false));
+    let published = updated.clone();
+    let server = tokio::spawn(async move {
+        loop {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0; 4096];
+            let size = socket.read(&mut request).await.unwrap();
+            let body = if request[..size].starts_with(b"GET /bilibili.yaml ") {
+                "payload:\n  - DOMAIN-SUFFIX,bilibili.com\n"
+            } else if request[..size].starts_with(b"GET /subscription.yaml ") {
+                if published.load(Ordering::Relaxed) {
+                    new_source
+                } else {
+                    old_source
+                }
+            } else {
+                continue;
+            };
+            let reply = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            socket.write_all(reply.as_bytes()).await.unwrap();
+        }
+    });
+    let source = format!("{base}/subscription.yaml");
+    let rule = "RULE-SET,bilibili,DIRECT";
+    let providers = format!(
+        r#"rule-providers:
+  bilibili:
+    type: http
+    behavior: classical
+    format: yaml
+    url: "{base}/bilibili.yaml"
+    path: ./ruleset/bilibili.yaml
+    interval: 86400
+"#
+    );
+    let mut engine = Engine::with_resources(store.clone(), test_resources()).unwrap();
+    engine
+        .import("Fixture".into(), source.clone(), None)
+        .await
+        .unwrap();
+    let profile = engine
+        .profiles
+        .iter()
+        .find(|profile| profile.source == source)
+        .unwrap()
+        .id
+        .clone();
+    engine.activate(profile.clone()).await.unwrap();
+    engine.start().await.unwrap();
+    let document = engine.global_override_document().await.unwrap();
+    let change = Change {
+        text: format!("prepend-rules:\n  - {rule}\n{providers}"),
+        enabled: true,
+        revision: document.revision,
+        expected_enabled: document.enabled,
+    };
+    engine.check_global_override(change.clone()).await.unwrap();
+    engine.save_global_override(change).await.unwrap();
+    let rules: serde_json::Value = engine.api.get("rules").await.unwrap();
+    assert_eq!(rules["rules"][0]["payload"], "bilibili");
+    assert_eq!(rules["rules"][0]["proxy"], "DIRECT");
+
+    let document = engine.global_override_document().await.unwrap();
+    engine
+        .save_global_override(Change {
+            text: providers.clone(),
+            enabled: true,
+            revision: document.revision,
+            expected_enabled: document.enabled,
+        })
+        .await
+        .unwrap();
+    let custom_rules = ProfileRules {
+        custom: vec![CustomRule {
+            id: "88f48cd4-fa7b-45f8-9800-8a9ff6c93fc0".into(),
+            rule: rule.into(),
+            enabled: true,
+        }],
+        ..ProfileRules::default()
+    };
+    engine
+        .save_profile_rules(&profile, custom_rules.clone())
+        .await
+        .unwrap();
+
+    let shared = Arc::new(tokio::sync::Mutex::new(engine));
+    for original in [old_source, new_source] {
+        {
+            let engine = shared.lock().await;
+            let rules: serde_json::Value = engine.api.get("rules").await.unwrap();
+            assert_eq!(rules["rules"][0]["payload"], "bilibili");
+            assert_eq!(rules["rules"][0]["proxy"], "DIRECT");
+            let providers: serde_json::Value = engine
+                .api
+                .request(
+                    reqwest::Method::GET,
+                    engine.api.url(&["providers", "rules"]).unwrap(),
+                )
+                .send()
+                .await
+                .unwrap()
+                .error_for_status()
+                .unwrap()
+                .json()
+                .await
+                .unwrap();
+            assert_eq!(providers["providers"]["bilibili"]["ruleCount"], 1);
+        }
+        let page = Engine::subscription_source(
+            &shared,
+            Request {
+                profile: profile.clone(),
+                view: View::Runtime,
+                show_credentials: false,
+                position: Position::From(0),
+                revision: None,
+            },
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(page.applied);
+        assert!(page.text.contains(rule));
+        assert_eq!(
+            std::fs::read_to_string(store.profile_path(&profile).unwrap()).unwrap(),
+            original
+        );
+        assert_eq!(
+            store.load_settings().unwrap().rule_profiles[&profile].as_ref(),
+            &custom_rules
+        );
+        let mut engine = shared.lock().await;
+        assert_eq!(
+            engine.global_override_document().await.unwrap().text,
+            providers
+        );
+        if original == old_source {
+            updated.store(true, Ordering::Relaxed);
+            engine
+                .import("Fixture".into(), source.clone(), Some(profile.clone()))
+                .await
+                .unwrap();
+        }
+    }
+    let mut engine = shared.lock().await;
+    let state = engine.poll(Scope::Home).await.unwrap();
+    assert!(!state.tun && !state.system_proxy);
+    engine.stop().await.unwrap();
+    server.abort();
+}
+
 fn assert_system_proxy_ports(store: &Store, port: u16) {
     use clash_of_rust::platform::{self, ProxyState, ProxyValue};
     let path = store.root.join("system-proxy.json");
