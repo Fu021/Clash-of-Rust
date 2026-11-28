@@ -1341,18 +1341,19 @@ impl App {
             kind = 15;
             let rule = &self.rule_state.rows[index];
             let source = match rule.source {
-                rule_manager::Source::Custom => language.text("自定义", "Custom"),
-                rule_manager::Source::Shortcut => language.text("快捷规则", "Rule shortcuts"),
-                rule_manager::Source::Subscription => language.text("订阅", "Subscription"),
+                rule_manager::Source::Custom => messages::rule_source_custom(language),
+                rule_manager::Source::Shortcut => messages::rule_source_shortcut(language),
+                rule_manager::Source::Subscription => messages::rule_source_subscription(language),
             };
             let status = if rule.enabled {
-                language.text("已启用", "Enabled")
+                messages::rule_status_enabled(language)
             } else {
-                language.text("已停用", "Disabled")
+                messages::rule_status_disabled(language)
             };
-            data.set_modal_title(language.text("规则详情", "Rule details").into());
-            let source_label = language.text("来源：", "Source: ");
-            data.set_modal_description(format!("{source_label}{source} · {status}").into());
+            data.set_modal_title(messages::rule_detail_title(language).into());
+            data.set_modal_description(
+                messages::rule_detail_summary(language, source, status).into(),
+            );
             data.set_modal_copy(rule.raw.as_ref().into());
             data.set_rule_enabled(rule.enabled);
         } else if let Some(guide) = self.claude.guide {

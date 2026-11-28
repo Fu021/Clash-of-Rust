@@ -2732,6 +2732,7 @@ fn rule_header_groups_override_and_shortcuts_and_the_row_opens_a_drawer() {
     ui_testing::initialize(950, 700);
     let mut app = fixture(Page::Rules);
     app.settings.global_override_enabled = true;
+    app.presentation_language = Language::SimplifiedChinese;
     let row_key = format!("rule-detail:{}", app.rule_state.rows[0].id);
     let window = AppWindow::new().unwrap();
     let data = window.global::<UiData>();
@@ -2760,12 +2761,21 @@ fn rule_header_groups_override_and_shortcuts_and_the_row_opens_a_drawer() {
     let _ = app.ui_intent(event.0, &event.1, &event.2);
     app.present_slint(&data, &mut models);
     assert_eq!(data.get_modal(), 15);
+    assert_eq!(data.get_modal_title(), "规则详情");
+    assert_eq!(data.get_modal_description(), "来源：订阅 · 已启用");
     assert_eq!(data.get_modal_copy(), app.rule_state.rows[0].raw.as_ref());
     motion_frame(&window, 50);
     let entering = target_bounds("rule-details-panel");
     motion_frame(&window, 250);
     let settled = target_bounds("rule-details-panel");
     assert!(entering[0] > settled[0], "{entering:?} -> {settled:?}");
+    app.presentation_language = Language::English;
+    app.present_slint(&data, &mut models);
+    assert_eq!(data.get_modal_title(), "Rule details");
+    assert_eq!(
+        data.get_modal_description(),
+        "Source: Subscription · Enabled"
+    );
     click_target(&window, "dialog-dismiss");
     let event = events.borrow_mut().pop().unwrap();
     assert_eq!(event.0, Intent::CancelConfirm);
