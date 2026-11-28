@@ -21,6 +21,8 @@ pub use ports::reserve_controller;
 mod profile;
 pub use profile::Profile;
 
+pub const YAML_INDENT: &str = "    ";
+
 pub const SUBSCRIPTION_RULES: [&str; 5] = [
     "GEOSITE,category-ads-all,REJECT",
     "GEOSITE,Private,DIRECT",

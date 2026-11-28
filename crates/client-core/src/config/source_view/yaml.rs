@@ -1,4 +1,5 @@
 use super::{MASK, SourceText};
+use crate::config::YAML_INDENT;
 use anyhow::{Result, ensure};
 use libyaml_rs as yaml;
 use std::{
@@ -107,6 +108,89 @@ struct Container {
     hide_next: bool,
     anchor: Option<Vec<u8>>,
     start: usize,
+}
+
+pub fn indent_sequences(raw: &str, cancelled: &dyn Fn() -> bool) -> Result<Option<SourceText>> {
+    if !raw.lines().any(|line| {
+        line.trim_start_matches(' ')
+            .strip_prefix('-')
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with([' ', '\t']))
+    }) {
+        return Ok(None);
+    }
+    let mut parser = Parser::new(raw)?;
+    let mut containers = Vec::new();
+    let mut indentation = 0;
+    let mut padding = Vec::new();
+    let mut remaining = super::super::RUNTIME_LIMIT - raw.len();
+    let mut output = None;
+    let mut copied = 0;
+    loop {
+        ensure!(!cancelled(), "源码请求已取消");
+        let Ok(event) = parser.next() else {
+            return Ok(None);
+        };
+        let span = event.span();
+        let previous_indent = indentation;
+        let boundary = match event.0.type_ {
+            yaml::YAML_STREAM_END_EVENT => break,
+            yaml::YAML_MAPPING_START_EVENT => {
+                containers.push(false);
+                continue;
+            }
+            yaml::YAML_SEQUENCE_START_EVENT => {
+                let indentless =
+                    !span.is_empty() && raw.as_bytes().get(span.end - 1) == Some(&b'-');
+                containers.push(indentless);
+                if !indentless {
+                    continue;
+                }
+                indentation += YAML_INDENT.len();
+                span.end - 1
+            }
+            yaml::YAML_MAPPING_END_EVENT | yaml::YAML_SEQUENCE_END_EVENT => {
+                if !containers.pop().expect("matched YAML container") {
+                    continue;
+                }
+                indentation -= YAML_INDENT.len();
+                span.start
+            }
+            _ => continue,
+        };
+        let boundary = if boundary == raw.len() {
+            boundary
+        } else {
+            raw[..boundary].rfind('\n').map_or(0, |newline| newline + 1)
+        };
+        let output = match &mut output {
+            Some(output) => output,
+            slot @ None => slot.insert(SourceText::new(raw.len())?),
+        };
+        let segment = &raw[copied..boundary];
+        if previous_indent == 0 {
+            output.append(segment.as_bytes())?;
+        } else {
+            if previous_indent > padding.len() {
+                padding.resize(previous_indent, b' ');
+            }
+            for line in segment.split_inclusive('\n') {
+                ensure!(!cancelled(), "源码请求已取消");
+                if !line.starts_with(['\r', '\n']) {
+                    let Some(space) = remaining.checked_sub(previous_indent) else {
+                        return Ok(None);
+                    };
+                    remaining = space;
+                    output.append(&padding[..previous_indent])?;
+                }
+                output.append(line.as_bytes())?;
+            }
+        }
+        copied = boundary;
+    }
+    if let Some(output) = &mut output {
+        output.append(&raw.as_bytes()[copied..])?;
+    }
+    Ok(output)
 }
 
 #[derive(Default)]

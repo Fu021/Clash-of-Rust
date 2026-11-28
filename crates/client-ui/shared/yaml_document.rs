@@ -1,5 +1,5 @@
 use super::yaml_core::config::{
-    Language,
+    Language, YAML_INDENT,
     documents::{Action, Reply},
     overrides::{Change, EDIT_LIMIT, revision},
     source_view::{Matches, Position, Request, View, find_match},
@@ -322,8 +322,12 @@ fn line_start(text: &str, line: usize) -> Result<usize> {
 
 pub fn indent(window: &slint::Window) {
     use slint::platform::WindowEvent;
-    window.dispatch_event(WindowEvent::KeyPressed { text: "  ".into() });
-    window.dispatch_event(WindowEvent::KeyReleased { text: "  ".into() });
+    window.dispatch_event(WindowEvent::KeyPressed {
+        text: YAML_INDENT.into(),
+    });
+    window.dispatch_event(WindowEvent::KeyReleased {
+        text: YAML_INDENT.into(),
+    });
 }
 
 #[cfg(test)]

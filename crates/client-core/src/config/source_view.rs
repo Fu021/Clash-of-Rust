@@ -1,5 +1,5 @@
-mod mask;
 mod text;
+mod yaml;
 
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
@@ -129,10 +129,20 @@ pub fn build_page(
 ) -> Result<Page> {
     ensure!(!cancelled(), "源码请求已取消");
     ensure!(raw.len() <= super::RUNTIME_LIMIT, "运行 YAML 超过大小限制");
-    let redacted = if request.show_credentials || matches!(request.view, View::OriginalRevealed) {
-        mask::redact_controller(raw, controller_secret, &cancelled)?
+    let indented = if matches!(request.view, View::Runtime) {
+        yaml::indent_sequences(raw, &cancelled)?
     } else {
-        mask::redact(raw, controller_secret, &cancelled)?
+        None
+    };
+    let raw = indented
+        .as_ref()
+        .map(SourceText::as_str)
+        .transpose()?
+        .unwrap_or(raw);
+    let redacted = if request.show_credentials || matches!(request.view, View::OriginalRevealed) {
+        yaml::redact_controller(raw, controller_secret, &cancelled)?
+    } else {
+        yaml::redact(raw, controller_secret, &cancelled)?
     };
     let text = redacted
         .as_ref()
@@ -345,6 +355,70 @@ rules: [MATCH,DIRECT]
             .unwrap();
             assert_eq!(revealed.text, raw.replace("control-generated-secret", MASK));
         }
+    }
+
+    #[test]
+    fn runtime_preview_indents_yaml_sequences_without_changing_the_values() {
+        let raw = "\
+proxies:
+- name: 中文🙂
+  password: example-password
+  description: |-
+    - this dash is part of the value
+    second line
+proxy-groups:
+- name: Group
+  proxies:
+  - 中文🙂
+  - DIRECT
+  already-indented:
+    - nested
+rules: &entries
+- MATCH,DIRECT
+alias: *entries
+flow: [one, two]";
+        let mut runtime_request = request(View::Runtime, Position::From(0));
+        runtime_request.show_credentials = true;
+        for applied in [false, true] {
+            let page = build_page(raw, "", &runtime_request, applied, || false).unwrap();
+            assert_eq!(page.applied, applied);
+            assert!(page.text.contains("proxies:\n    - name: 中文🙂"));
+            assert!(
+                page.text
+                    .contains("      proxies:\n          - 中文🙂\n          - DIRECT\n")
+            );
+            assert!(
+                page.text
+                    .contains("      already-indented:\n        - nested\n")
+            );
+            assert!(
+                page.text
+                    .contains("rules: &entries\n    - MATCH,DIRECT\nalias: *entries\n")
+            );
+            assert_eq!(
+                yaml_serde::from_str::<yaml_serde::Value>(&page.text).unwrap(),
+                yaml_serde::from_str::<yaml_serde::Value>(raw).unwrap()
+            );
+        }
+        let original = build_page(
+            raw,
+            "",
+            &request(View::OriginalRevealed, Position::From(0)),
+            false,
+            || false,
+        )
+        .unwrap();
+        assert_eq!(original.text, raw);
+        runtime_request.show_credentials = false;
+        runtime_request.position = Position::Find {
+            query: "          - DIRECT".into(),
+            from: 0,
+            previous: false,
+        };
+        let page = build_page(raw, "example-password", &runtime_request, true, || false).unwrap();
+        let (start, end) = page.selected.unwrap();
+        assert_eq!(&page.text[start..end], "          - DIRECT");
+        assert!(!page.text.contains("example-password"));
     }
 
     #[test]
