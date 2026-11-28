@@ -256,6 +256,8 @@ struct Reply<T = Value> {
     error: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     yaml_error: Option<YamlError>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    yaml_details: Option<crate::config::documents::FailureDetails>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -613,6 +615,7 @@ mod tests {
             result: document,
             error: None,
             yaml_error: None,
+            yaml_details: None,
         })
         .unwrap();
         let reply: Reply<crate::rule_manager::Document> = serde_json::from_slice(&bytes).unwrap();

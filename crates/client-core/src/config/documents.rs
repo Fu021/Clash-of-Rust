@@ -100,6 +100,14 @@ impl Recovery {
         self != Self::Restored
     }
 
+    pub fn with_failure(self, stage: ApplyStage, error: &anyhow::Error) -> anyhow::Error {
+        anyhow::Error::msg(FailureDetails {
+            stage: Some(stage),
+            io: error.downcast_ref::<io::Error>().map(IoFailure::from),
+        })
+        .context(self)
+    }
+
     fn detail(self, language: Language) -> &'static str {
         let (chinese, english) = match self {
             Self::Restored => (
@@ -132,6 +140,68 @@ impl fmt::Display for Recovery {
 impl std::error::Error for Recovery {}
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApplyStage {
+    Reload,
+    HealthCheck,
+    Commit,
+}
+
+impl ApplyStage {
+    fn message(self) -> &'static str {
+        match self {
+            Self::Reload => "内核重载失败",
+            Self::HealthCheck => "重载后的内核健康检查失败",
+            Self::Commit => "配置写入失败",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct IoFailure {
+    kind: String,
+    os_code: Option<i32>,
+    summary: String,
+}
+
+impl From<&io::Error> for IoFailure {
+    fn from(error: &io::Error) -> Self {
+        Self {
+            kind: format!("{:?}", error.kind()),
+            os_code: error.raw_os_error(),
+            summary: io::Error::from(error.kind()).to_string(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct FailureDetails {
+    stage: Option<ApplyStage>,
+    io: Option<IoFailure>,
+}
+
+impl FailureDetails {
+    pub fn from_error(error: &anyhow::Error) -> Option<Self> {
+        error.downcast_ref::<Self>().cloned().or_else(|| {
+            error.downcast_ref::<io::Error>().map(|error| Self {
+                stage: None,
+                io: Some(error.into()),
+            })
+        })
+    }
+}
+
+impl fmt::Display for FailureDetails {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let text = match self.stage {
+            Some(stage) => stage.message(),
+            None => self.io.as_ref().map_or("YAML 操作失败", |io| &io.summary),
+        };
+        formatter.write_str(text)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub struct SyntaxLocation {
     pub line: usize,
     pub column: usize,
@@ -153,7 +223,7 @@ pub struct Failure {
     operation: Operation,
     recovery: Option<Recovery>,
     syntax: Option<(usize, usize)>,
-    io: Option<(io::ErrorKind, Option<i32>)>,
+    details: Option<FailureDetails>,
     reason: Option<&'static str>,
 }
 
@@ -185,9 +255,7 @@ impl Failure {
             syntax: error
                 .downcast_ref::<SyntaxLocation>()
                 .map(|location| (location.line, location.column)),
-            io: error
-                .downcast_ref::<io::Error>()
-                .map(|error| (error.kind(), error.raw_os_error())),
+            details: FailureDetails::from_error(error),
             reason,
         }
     }
@@ -199,14 +267,24 @@ impl Failure {
     pub fn message(&self, language: Language) -> String {
         let summary = self.operation.summary(language);
         let detail = if let Some(recovery) = self.recovery {
-            recovery.detail(language).into()
+            let recovery = recovery.detail(language);
+            if let Some(stage) = self.details.as_ref().and_then(|details| details.stage) {
+                let cause = crate::error_message::localize(stage.message(), language);
+                format!("{cause} · {recovery}")
+            } else {
+                recovery.into()
+            }
         } else if let Some((line, column)) = self.syntax {
             let label = language.text("全局覆写 YAML 格式错误", "Invalid global override YAML");
             format!("{label} · {line}:{column}")
         } else if let Some(reason) = self.reason {
             crate::error_message::localize(reason, language).into_owned()
-        } else if let Some((kind, _)) = self.io {
-            io::Error::from(kind).to_string()
+        } else if let Some(io) = self
+            .details
+            .as_ref()
+            .and_then(|details| details.io.as_ref())
+        {
+            io.summary.clone()
         } else {
             language
                 .text(
@@ -230,10 +308,15 @@ impl Failure {
         if let Some((line, column)) = self.syntax {
             event["location"] = json!({"line":line,"column":column});
         }
-        if let Some((kind, os_code)) = self.io {
-            event["io_kind"] = json!(format!("{kind:?}"));
-            if let Some(os_code) = os_code {
-                event["os_code"] = json!(os_code);
+        if let Some(details) = &self.details {
+            if let Some(stage) = details.stage {
+                event["failed_stage"] = json!(stage);
+            }
+            if let Some(io) = &details.io {
+                event["io_kind"] = json!(io.kind);
+                if let Some(os_code) = io.os_code {
+                    event["os_code"] = json!(os_code);
+                }
             }
         }
         event
@@ -280,11 +363,15 @@ mod tests {
             (true, false, "critical", "runtime_failed"),
             (false, false, "critical", "files_and_runtime_failed"),
         ] {
-            let error = Recovery::after_attempt(disk, runtime).into();
+            let error = Recovery::after_attempt(disk, runtime)
+                .with_failure(ApplyStage::Commit, &device_error);
             let diagnostic = Failure::new(Operation::Apply, &error).incident();
             assert_eq!(diagnostic["code"], "yaml_override_apply_failed");
             assert_eq!(diagnostic["level"], level);
             assert_eq!(diagnostic["recovery"], recovery);
+            assert_eq!(diagnostic["failed_stage"], "commit");
+            assert_eq!(diagnostic["os_code"], 13);
+            assert!(!format!("{error:#}").contains("/fixture/private"));
         }
     }
 }

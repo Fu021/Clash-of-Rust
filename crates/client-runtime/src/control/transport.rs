@@ -1,9 +1,9 @@
 use super::*;
 use crate::{
-    config::{Store, atomic_write},
+    config::{Store, atomic_write, documents::FailureDetails},
     engine::Engine,
 };
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, ensure};
 use serde::de::DeserializeOwned;
 use serde_json::value::RawValue;
 use std::{
@@ -28,12 +28,15 @@ const VIEW_IDLE_DELAY: Duration = Duration::from_secs(3);
 fn decode_reply<T: DeserializeOwned>(bytes: &[u8]) -> Result<T> {
     let reply: Reply<&RawValue> = serde_json::from_slice(bytes)?;
     if let Some(error) = reply.error {
-        match reply.yaml_error {
-            Some(YamlError::Recovery(recovery)) => return Err(recovery.into()),
-            Some(YamlError::Syntax(location)) => return Err(location.into()),
-            None => {}
-        }
-        bail!("{error}");
+        let error = match reply.yaml_error {
+            Some(YamlError::Recovery(recovery)) => recovery.into(),
+            Some(YamlError::Syntax(location)) => location.into(),
+            None => anyhow::Error::msg(error),
+        };
+        return Err(match reply.yaml_details {
+            Some(details) => error.context(details),
+            None => error,
+        });
     }
     Ok(serde_json::from_str(reply.result.get())?)
 }
@@ -331,6 +334,13 @@ pub async fn serve(engine: &Arc<Mutex<Engine>>, owner: Owner) -> Result<()> {
                     &operation,
                     Command::Snapshot { .. } | Command::RuleDocument { .. }
                 );
+                let yaml_request = matches!(
+                    &operation,
+                    Command::GlobalOverrideDocument
+                        | Command::SubscriptionSource { .. }
+                        | Command::CheckGlobalOverride { .. }
+                        | Command::SaveGlobalOverride { .. }
+                );
                 let (result, disconnected) = if matches!(
                     &operation,
                     Command::GeoUpdate
@@ -367,6 +377,7 @@ pub async fn serve(engine: &Arc<Mutex<Engine>>, owner: Owner) -> Result<()> {
                         result,
                         error: None,
                         yaml_error: None,
+                        yaml_details: None,
                     },
                     Err(error) => {
                         let secret = engine.lock().await.settings.secret.clone();
@@ -384,6 +395,9 @@ pub async fn serve(engine: &Arc<Mutex<Engine>>, owner: Owner) -> Result<()> {
                             result: Value::Null.into(),
                             error: Some(format!("{error:#}").replace(&secret, "[密钥]")),
                             yaml_error,
+                            yaml_details: yaml_request
+                                .then(|| FailureDetails::from_error(&error))
+                                .flatten(),
                         }
                     }
                 };
@@ -402,6 +416,7 @@ pub async fn serve(engine: &Arc<Mutex<Engine>>, owner: Owner) -> Result<()> {
                             result: Value::Null,
                             error: Some("结果超过 32 MiB，请缩小查询范围".into()),
                             yaml_error: None,
+                            yaml_details: None,
                         })
                         .expect("static reply");
                     }
@@ -458,6 +473,7 @@ mod tests {
             result,
             error: None,
             yaml_error: None,
+            yaml_details: None,
         })
         .unwrap();
         let legacy: Reply = serde_json::from_slice(&bytes).unwrap();
@@ -479,18 +495,69 @@ mod tests {
 
     #[test]
     fn yaml_apply_recovery_severity_survives_the_local_control_connection() {
-        use crate::config::documents::Recovery;
+        use crate::config::documents::{ApplyStage, Failure, Operation, Recovery};
+        let io = anyhow::Error::new(std::io::Error::from_raw_os_error(2))
+            .context("synthetic source /fixture/private/secret.yaml");
 
         for recovery in [Recovery::Restored, Recovery::RuntimeFailed] {
+            let failure = recovery.with_failure(ApplyStage::Commit, &io);
             let bytes = serde_json::to_vec(&Reply {
                 result: Value::Null,
                 error: Some(recovery.to_string()),
                 yaml_error: Some(YamlError::Recovery(recovery)),
+                yaml_details: FailureDetails::from_error(&failure),
             })
             .unwrap();
             let error = decode_reply::<()>(&bytes).unwrap_err();
             assert_eq!(error.downcast_ref::<Recovery>(), Some(&recovery));
+            let incident = Failure::new(Operation::Apply, &error).incident();
+            assert_eq!(incident["failed_stage"], "commit");
+            assert_eq!(incident["os_code"], 2);
+            assert!(!incident.to_string().contains("/fixture/private"));
         }
+    }
+
+    #[tokio::test]
+    async fn missing_yaml_source_keeps_its_system_error_through_the_daemon() {
+        use crate::config::{
+            Profile,
+            documents::{Failure, Operation},
+            source_view::{Page, Position, Request, View},
+        };
+
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::at(directory.path().into()).unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+        let mut engine = crate::engine::test_support::fixture(store.clone());
+        engine.profiles.push(Profile {
+            id: id.clone(),
+            name: "fixture".into(),
+            source: "not-saved.yaml".into(),
+            updated: 0,
+            usage: None,
+            builtin: false,
+        });
+        let engine = Arc::new(Mutex::new(engine));
+        serve(&engine, Owner::Daemon).await.unwrap();
+        let remote = Remote::discover(&store, Duration::from_secs(5))
+            .unwrap()
+            .unwrap();
+        let error = remote
+            .request::<Page>(Command::SubscriptionSource {
+                request: Request {
+                    profile: id.clone(),
+                    view: View::Original,
+                    position: Position::From(0),
+                    revision: None,
+                },
+            })
+            .await
+            .err()
+            .expect("missing profile data");
+        let incident = Failure::new(Operation::Original, &error).incident();
+        assert_eq!(incident["io_kind"], "NotFound");
+        assert_eq!(incident["os_code"], 2);
+        assert!(!incident.to_string().contains(&id));
     }
 
     #[test]

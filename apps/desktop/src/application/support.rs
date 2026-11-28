@@ -208,17 +208,24 @@ mod tests {
 
     #[test]
     fn yaml_warnings_use_actual_recovery_and_keep_safe_diagnostics_after_dismissal() {
-        use clash_client_core::config::documents::{Failure, Operation, Recovery};
+        use clash_client_core::config::documents::{ApplyStage, Failure, Operation, Recovery};
 
         let mut app = App::initial_state(Err(anyhow::anyhow!("initializing")), None);
         app.dismiss_notice();
-        app.show_yaml_failure(Failure::new(Operation::Apply, &Recovery::Restored.into()));
-        assert!(app.notice_visible && app.error && !app.notice_critical);
+        app.presentation_language = Language::English;
+        let cause = anyhow::anyhow!("synthetic core details");
         app.show_yaml_failure(Failure::new(
             Operation::Apply,
-            &Recovery::RuntimeFailed.into(),
+            &Recovery::Restored.with_failure(ApplyStage::Reload, &cause),
+        ));
+        assert!(app.notice_visible && app.error && !app.notice_critical);
+        assert!(app.notice.contains("Core reload failed"));
+        app.show_yaml_failure(Failure::new(
+            Operation::Apply,
+            &Recovery::RuntimeFailed.with_failure(ApplyStage::HealthCheck, &cause),
         ));
         assert!(app.notice_visible && app.error && app.notice_critical);
+        assert!(app.notice.contains("Core health check failed after reload"));
         app.show_yaml_failure(Failure::new(
             Operation::ReadExternal,
             &anyhow::anyhow!("synthetic path /fixture/private/view.yaml"),
@@ -228,8 +235,10 @@ mod tests {
         let context = app.diagnostic_context("");
         let events = context["events"].as_array().unwrap();
         assert_eq!(events[events.len() - 2]["level"], "critical");
+        assert_eq!(events[events.len() - 2]["failed_stage"], "health_check");
         assert_eq!(events.last().unwrap()["code"], "yaml_external_read_failed");
         assert!(!context.to_string().contains("/fixture/private"));
+        assert!(!context.to_string().contains("synthetic core details"));
     }
 
     #[test]

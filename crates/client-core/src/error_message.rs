@@ -500,6 +500,9 @@ fn legacy_message(message: &str, language: Language) -> Option<&'static str> {
         "内核拒绝配置后恢复失败" => {
             "Could not restore the core after it rejected the configuration"
         }
+        "内核重载失败" => "Core reload failed",
+        "重载后的内核健康检查失败" => "Core health check failed after reload",
+        "配置写入失败" => "Could not write the configuration",
         "配置写入失败，磁盘恢复也失败" => {
             "Configuration write failed; disk recovery also failed"
         }

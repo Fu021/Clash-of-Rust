@@ -4,9 +4,9 @@
 
 ## 当前上限与保留预算
 
-维护者于 2026-11-21 同意增加 GitHub Actions 缓存，费用保持低于 **2 美元/月**。仓库 `max_cache_size_gb` 从 24 提高到 **34 GB**，已用 GitHub API 读回。GitHub 每仓库含 10 GB 缓存，超额每 GB 月 0.07 美元；账户预算还需计入适用的其他 Actions 用量。见 [GitHub 仓库缓存设置](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/enabling-features-for-your-repository/managing-github-actions-settings-for-a-repository)及[缓存计费](https://docs.github.com/en/billing/concepts/product-billing/github-actions)。
+维护者授权在 **2 美元/月**的 Actions 预算内为缓存换代留出空间。2026-11-28 通过 GitHub API 将仓库 `max_cache_size_gb` 从 34 提高到 **38 GB**，已读回确认。GitHub 每仓库含 10 GB 缓存，超额每 GB 月 0.07 美元；账户预算还需计入适用的其他 Actions 用量。见 [GitHub 仓库缓存设置](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/enabling-features-for-your-repository/managing-github-actions-settings-for-a-repository)及[缓存计费](https://docs.github.com/en/billing/concepts/product-billing/github-actions)。
 
-缓存按每小时占用峰值累计，不按配置上限包月。以 30 天、720 小时计算，费用为 `Σ max(每小时峰值 GB − 10, 0) × 0.07 ÷ 720`。34 GB 整月占满约 **1.68 美元**；短于一小时也按该小时峰值计，跨两个计费小时可能同时计入。这只是缓存费估算，实际以账单为准，不能视为账户总费用的硬上限。
+缓存按每小时占用峰值累计，不按配置上限包月。以 30 天、720 小时计算，费用为 `Σ max(每小时峰值 GB − 10, 0) × 0.07 ÷ 720`。38 GB 整月占满约 **1.96 美元**；短于一小时也按该小时峰值计，跨两个计费小时可能同时计入。这只是缓存费估算，账户总费用以账单为准。
 
 精简矩阵的 [CI 44712218319](https://github.com/Fu021/Clash-of-Rust/actions/runs/44712218319) 收尾从 22.40 降到 17.25 GiB；更早的多平台同时换代峰值曾达到 31.85 GiB。GitHub 计费中的 GB 定义为 2³⁰ 字节，与日志和脚本使用的 GiB 相同。继续观察缓存逐出、恢复耗时和账单，容量增加不能代替浪费排查。
 
@@ -35,6 +35,8 @@
 正式版来源 `24a1c967` 的 [CI 45783249363](https://github.com/Fu021/Clash-of-Rust/actions/runs/45783249363) 13 项通过。九份 Rust 缓存均报告 `Cache up-to-date.`，包含 macOS Intel 和 ARM64。三个 Android Go 目标、共享 Maven 和两套 Linux 构建镜像均成功复用。[Memory Benchmark 45788967631](https://github.com/Fu021/Clash-of-Rust/actions/runs/45788967631) 的 Rust 缓存同样报告 `Cache up-to-date.`。两轮预算作业均无需移除条目，基准结束后共 19 条、19.19 GiB，均属 `main`，其中一条用于内存基准。
 
 `70bd5c55` 的 [CI 45843335474](https://github.com/Fu021/Clash-of-Rust/actions/runs/45843335474) 13 项通过。macOS Intel 将 Rust 缓存保存时限增至 12 分钟，并用新键避开无法预留的旧键。该目标上传完整的 2.30 GiB，新键已在缓存清单中；其余八个 Rust 目标报告 `Cache up-to-date.`。Android 三个 Go 目标、Maven 和 Linux 双架构构建缓存均命中。预算作业移除旧 Intel 键，保留 19 条、19.26 GiB，均属 `main`。
+
+`a87998f8` 的 [CI 46131889672](https://github.com/Fu021/Clash-of-Rust/actions/runs/46131889672) 13 项通过。九份 Rust 新缓存写入 17.67 GiB。Go、Maven 和两套 Linux 编译镜像命中。预算作业移除 8 条旧 Rust 缓存，收尾清单保留 `main` 的 14 条、19.26 GiB，其中没有本轮恢复过的 Maven 键。预算作业的删除列表没有该键，服务端未提供消失原因。按约 19.5 GiB 常驻和 17.7 GiB 一轮写入估算，两代重叠约 37.2 GiB。38 GB 仓库上限留出换代空间，预算作业仍按 30 GiB 目标收尾。
 
 ## main 基线与分支只读
 

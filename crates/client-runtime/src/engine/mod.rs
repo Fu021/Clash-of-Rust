@@ -8,8 +8,9 @@ use crate::{
     api::{Api, ConfigStatus, ConnectionStats, Proxies},
     assets::{self, GeoManifest},
     config::{
-        Profile, RuleOverrides, Settings, Store, atomic_write, documents::Recovery, overrides,
-        parse_profile, read_profile, read_runtime_config, runtime_config, source_view,
+        Profile, RuleOverrides, Settings, Store, atomic_write,
+        documents::{ApplyStage, Recovery},
+        overrides, parse_profile, read_profile, read_runtime_config, runtime_config, source_view,
     },
     platform,
 };
@@ -1055,8 +1056,11 @@ impl Engine {
         if builtin || (!settings.global_override_enabled && !self.settings.global_override_enabled)
         {
             transaction.prepare()?;
-            if transaction.commit().is_err() {
-                return Err(Recovery::after_attempt(transaction.rollback().is_ok(), true).into());
+            if let Err(error) = transaction.commit() {
+                return Err(
+                    Recovery::after_attempt(transaction.rollback().is_ok(), true)
+                        .with_failure(ApplyStage::Commit, &error),
+                );
             }
         } else {
             self.commit_profile_checked(transaction, &payload, true, Some(&change))
@@ -1559,14 +1563,20 @@ impl Engine {
         transaction.prepare()?;
         let changed = async {
             if let Some(next) = &next {
-                self.api.reload(next).await?;
-                self.healthy().await?;
+                self.api
+                    .reload(next)
+                    .await
+                    .map_err(|error| (ApplyStage::Reload, error))?;
+                self.healthy()
+                    .await
+                    .map_err(|error| (ApplyStage::HealthCheck, error))?;
             }
-            transaction.commit()?;
-            Ok::<_, anyhow::Error>(())
+            transaction
+                .commit()
+                .map_err(|error| (ApplyStage::Commit, error))
         }
         .await;
-        if let Err(error) = changed {
+        if let Err((stage, error)) = changed {
             // Always attempt both recoveries, even if the controller is unreachable.
             let runtime = if let Some(previous) = previous {
                 async {
@@ -1580,7 +1590,8 @@ impl Engine {
             };
             let disk = transaction.rollback();
             if override_change.is_some() {
-                return Err(Recovery::after_attempt(disk.is_ok(), runtime.is_ok()).into());
+                return Err(Recovery::after_attempt(disk.is_ok(), runtime.is_ok())
+                    .with_failure(stage, &error));
             }
             match (runtime, disk) {
                 (Ok(()), Ok(())) => {

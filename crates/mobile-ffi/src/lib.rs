@@ -3,7 +3,10 @@ use anyhow::{Context, Result, ensure};
 pub use clash_client_core as core;
 use core::{
     api::{Api, Connections, Proxies},
-    config::{Profile, Settings, Store, atomic_write},
+    config::{
+        Profile, Settings, Store, atomic_write,
+        documents::{ApplyStage, Recovery},
+    },
     rule_manager::{CustomRule, Document, ProfileRules},
 };
 use serde_json::{Value, json};
@@ -669,12 +672,9 @@ impl Session {
                     &serde_json::to_vec_pretty(&settings)?,
                 )?;
                 tx.prepare()?;
-                if tx.commit().is_err() {
-                    return Err(core::config::documents::Recovery::after_attempt(
-                        tx.rollback().is_ok(),
-                        true,
-                    )
-                    .into());
+                if let Err(error) = tx.commit() {
+                    return Err(Recovery::after_attempt(tx.rollback().is_ok(), true)
+                        .with_failure(ApplyStage::Commit, &error));
                 }
                 self.settings = settings;
                 return Ok(());
@@ -722,11 +722,8 @@ impl Session {
                 json!({"op":"reload","config":old_raw,"ipv6":effective_ipv6(&self.settings)}),
             );
             if global_override {
-                return Err(core::config::documents::Recovery::after_attempt(
-                    disk.is_ok(),
-                    runtime.is_ok(),
-                )
-                .into());
+                return Err(Recovery::after_attempt(disk.is_ok(), runtime.is_ok())
+                    .with_failure(ApplyStage::Reload, &error));
             }
             disk.context("配置写入失败，磁盘恢复也失败")?;
             runtime.context("内核拒绝配置后恢复失败")?;
@@ -742,11 +739,8 @@ impl Session {
                     .request(json!({"op":"reload","config":old_raw,"ipv6":effective_ipv6(&self.settings)}))
             }).transpose();
             if global_override {
-                return Err(core::config::documents::Recovery::after_attempt(
-                    disk.is_ok(),
-                    runtime.is_ok(),
-                )
-                .into());
+                return Err(Recovery::after_attempt(disk.is_ok(), runtime.is_ok())
+                    .with_failure(ApplyStage::Commit, &error));
             }
             disk.context("配置写入失败，磁盘恢复也失败")?;
             runtime.context("配置保存失败，内核恢复也失败")?;
@@ -1655,7 +1649,7 @@ mod tests {
 
     #[tokio::test]
     async fn global_override_preserves_runtime_and_document_on_reload_failure() {
-        use super::core::config::documents::Recovery;
+        use super::core::config::documents::{Failure, Operation};
         use std::sync::atomic::{AtomicUsize, Ordering};
 
         #[derive(Default)]
@@ -1701,6 +1695,10 @@ mod tests {
         host.0.store(1, Ordering::Release);
         let error = session.save_global_override(change()).unwrap_err();
         assert_eq!(error.downcast_ref::<Recovery>(), Some(&Recovery::Restored));
+        let incident = Failure::new(Operation::Apply, &error).incident();
+        assert_eq!(incident["failed_stage"], "reload");
+        assert_eq!(incident["level"], "recoverable");
+        assert!(!format!("{error:#}").contains("simulated reload failure"));
         assert_eq!(std::fs::read(&path).unwrap(), old);
         assert!(!session.store.root.join("merge.yaml").exists());
         assert!(!session.settings.global_override_enabled);
@@ -1712,6 +1710,9 @@ mod tests {
             error.downcast_ref::<Recovery>(),
             Some(&Recovery::RuntimeFailed)
         );
+        let incident = Failure::new(Operation::Apply, &error).incident();
+        assert_eq!(incident["failed_stage"], "reload");
+        assert_eq!(incident["level"], "critical");
         assert_eq!(std::fs::read(&path).unwrap(), old);
         assert!(!session.store.root.join("merge.yaml").exists());
         assert!(!session.settings.global_override_enabled);
