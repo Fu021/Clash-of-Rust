@@ -109,7 +109,8 @@ async function checkPage(context, origin, route, width) {
       const current = menu.locator('a[aria-current="page"]');
       if (name && name !== "en") {
         assert.equal(await current.count(), 1, `Current mobile navigation: ${route}`);
-        assert.equal(await current.getAttribute("href"), `${["tui", "cli"].includes(name) ? "guide" : name}.html`);
+        const language = route.startsWith("/en/") ? "/en" : "";
+        assert.equal(await current.getAttribute("href"), `${language}/${["tui", "cli"].includes(name) ? "guide" : name}`);
         assert.notEqual(await current.evaluate(link => getComputedStyle(link).boxShadow), "none",
           `Missing current-page underline: ${route}`);
       } else {
@@ -732,7 +733,7 @@ async function run() {
       }
       await page.goto(origin + language + "/guide#tui-pages", { waitUntil: "load", timeout: 20000 });
       assert.equal(await page.locator("#tui-pages").isVisible(), true);
-      assert.equal(await page.locator('#tui a[href="tui.html"]').count(), 1);
+      assert.equal(await page.locator(`#tui a[href="${language}/tui"]`).count(), 1);
       await page.locator(".mobile-menu summary").click();
       assert.equal(await page.locator(".mobile-menu nav").isVisible(), true);
     }

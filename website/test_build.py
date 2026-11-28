@@ -131,8 +131,16 @@ class SiteTests(unittest.TestCase):
             for ref in doc.refs:
                 url=urlsplit(ref)
                 if url.scheme or url.netloc: continue
-                target=(path.parent/unquote(url.path)).resolve() if url.path else path
+                if url.path.startswith("/"):
+                    self.assertFalse(url.path.endswith(".html"), ref)
+                    target = build.DIST / unquote(url.path.lstrip("/"))
+                    if not url.path.endswith("/"):
+                        target = target.with_suffix(".html")
+                else:
+                    target=(path.parent/unquote(url.path)).resolve() if url.path else path
                 if target.is_dir(): target/='index.html'
+                if url.path and target in docs:
+                    self.assertTrue(url.path.startswith("/"), ref)
                 with self.subTest(page=path.name,ref=ref):
                     self.assertTrue(target.exists())
                     if url.fragment and target in docs:self.assertIn(unquote(url.fragment),docs[target].ids)
@@ -147,7 +155,7 @@ class SiteTests(unittest.TestCase):
                 expected = "guide" if name in ("tui", "cli") else name
                 if name != "index":
                     self.assertTrue(current)
-                    self.assertEqual(set(current), {expected+".html"})
+                    self.assertEqual(set(current), {build.site_path(language or "zh", expected)})
                 else:
                     self.assertFalse(current)
     def test_theme_assets_and_initialization(self):
@@ -185,7 +193,30 @@ class SiteTests(unittest.TestCase):
             target = path/'index.html' if url.path.endswith('/') else path.with_suffix('.html')
             self.assertTrue(target.is_file(), url.path)
         for page in build.DIST.rglob('*.html'):
-            self.assertNotIn(' style=', page.read_text(encoding='utf-8'))
+            source = page.read_text(encoding='utf-8')
+            self.assertNotIn(' style=', source)
+            lang = "en" if page.parent.name == "en" else "zh"
+            path = build.site_path(lang, page.stem)
+            self.assertIn(f'<link rel="canonical" href="{build.SITE_URL}{path}">', source)
+            for hreflang, language in (("en", "en"), ("zh-CN", "zh"), ("x-default", "zh")):
+                alternate = build.SITE_URL + build.site_path(language, page.stem)
+                self.assertIn(f'<link rel="alternate" hreflang="{hreflang}" href="{alternate}">', source)
+            self.assertIn('<meta property="og:site_name" content="Clash of Rust">', source)
+            schema = re.findall(r'<script type="application/ld\+json">(.*?)</script>', source)
+            if page.stem == "index":
+                self.assertIn("<h1>Clash of Rust</h1>", source)
+                self.assertEqual(list(map(json.loads, schema)), [{
+                    "@context": "https://schema.org", "@type": "WebSite",
+                    "name": "Clash of Rust", "url": build.SITE_URL + "/",
+                }])
+            else:
+                self.assertFalse(schema)
+    def test_file_preview_links(self):
+        page = '<a href="guide.html#gui">Guide</a>'
+        document = build.layout("en", "index", "Title", "Description", page, self.data, file_links=True)
+        self.assertIn(page, document)
+        self.assertIn('href="../index.html"', document)
+        self.assertIn('href="download.html"', document)
     def test_stable_downloads_work_without_javascript(self):
         stable = self.data['downloads']['stable']
         tag = stable['tag']
@@ -228,7 +259,7 @@ class SiteTests(unittest.TestCase):
                 alternate = next(attrs for attrs in links if attrs.get('hreflang') == 'x-default')
                 self.assertEqual(alternate['href'], build.SITE_URL+'/'+path)
                 toggle = next(attrs for tag,attrs in document.elements if 'data-set-lang' in attrs)
-                self.assertEqual(toggle['href'], ('../' if language else 'en/')+name+'.html')
+                self.assertEqual(toggle['href'], build.site_path('zh' if language else 'en', name))
                 self.assertNotIn('Illustrations were made', source)
                 self.assertNotIn('插画为本站绘制', source)
         self.assertNotIn('navigator.language', (build.SRC/'site.js').read_text())
@@ -255,9 +286,10 @@ class SiteTests(unittest.TestCase):
             for name in ('guide', 'tui', 'cli'):
                 document = Document()
                 document.feed((build.DIST/language/(name+'.html')).read_text())
+                expected = {build.site_path(language or "zh", manual) for manual in ('guide', 'tui', 'cli')}
                 manual_links = {attrs['href'] for tag, attrs in document.elements
-                                if tag == 'a' and attrs.get('href') in ('guide.html', 'tui.html', 'cli.html')}
-                self.assertEqual(manual_links, {'guide.html', 'tui.html', 'cli.html'})
+                                if tag == 'a' and attrs.get('href') in expected}
+                self.assertEqual(manual_links, expected)
                 self.assertTrue(any(tag == 'details' and 'data-toc' in attrs for tag, attrs in document.elements))
     def test_all_pages_have_illustrations_and_exact_readme_wordmark(self):
         self.assertEqual((build.DIST/'assets/wordmark.svg').read_bytes(),

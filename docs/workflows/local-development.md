@@ -85,7 +85,7 @@ python3 -m venv ~/.local/share/clash-of-rust/preview
 ```sh
 ~/.local/share/clash-of-rust/preview/bin/python scripts/preview-page.py \
   docs/workflows/local-development.md --root . --full-page --output /tmp/cor-doc.png
-python3 -B website/build.py
+python3 -B website/build.py --file-links
 ~/.local/share/clash-of-rust/preview/bin/python scripts/preview-page.py \
   website/dist/index.html --width 1280 --height 900 --output /tmp/cor-home.png
 ```

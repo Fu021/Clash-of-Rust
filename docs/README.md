@@ -21,6 +21,7 @@
 | 想做什么 | 阅读位置 |
 | --- | --- |
 | 找代码、理解模块与数据流 | [开发与验证](development.md)，含平台边界、占用锁与验证要求；[全仓职责树](structure-review.md#目录与职责) |
+| 对比内核兼容性与桌面切换方案 | [内核备选方案评估](core-alternatives.md) |
 | 校正文档冲突、拆分大文件或规划目录重构 | [文档与代码结构复查](structure-review.md) |
 | 贡献代码或文档 | [贡献者须知](../.github/CONTRIBUTING.md)；agent 另读[开发约束](../AGENTS.md) |
 | 添加待办、持续跟进、换 agent 接手或汇报进度 | [本地待办与持续跟进](agent-todo.md)，任务保存在当前工作区的 `todo/` |

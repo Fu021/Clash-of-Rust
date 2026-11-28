@@ -5,6 +5,7 @@
 Chinese pages land in dist/, English pages in dist/en/. Illustrations and fonts
 come ready-made from src/assets; prepare_assets.py regenerates those.
 """
+from argparse import ArgumentParser
 from html import escape
 import json
 from pathlib import Path
@@ -221,12 +222,25 @@ def render_artwork(body, root):
     return re.sub(r"<picture>.*?</picture>", night_sources, body, flags=re.S)
 
 
-def layout(lang, page, title, description, body, release_data):
+def site_path(lang, page):
+    return ("/en/" if lang == "en" else "/") + ("" if page == "index" else page)
+
+
+def canonical_links(document, lang):
+    def rewrite(match):
+        prefix, name = match.groups()
+        target = {"../": "zh", "en/": "en"}.get(prefix, lang)
+        return f' href="{site_path(target, name)}'
+
+    pages = "|".join(PAGES)
+    return re.sub(rf' href="(\.\./|en/)?({pages})\.html(?=[?#"])', rewrite, document)
+
+
+def layout(lang, page, title, description, body, release_data, file_links=False):
     text = TEXT[lang]
     root = "" if lang == "zh" else "../"
     other = f"en/{page}.html" if lang == "zh" else f"../{page}.html"
-    page_path = "" if page == "index" else page
-    canonical = f"{SITE_URL}/{'en/' if lang == 'en' else ''}{page_path}"
+    canonical = SITE_URL + site_path(lang, page)
     current = ' aria-current="page"'
     nav = "".join(
         f'<a href="{name}.html"{current if name == page or name == "guide" and page in ("tui", "cli") else ""}>{label}</a>'
@@ -237,7 +251,12 @@ def layout(lang, page, title, description, body, release_data):
     foot = text["foot_links"]
     body = render_artwork(body, root)
     release_json = json.dumps(release_data, ensure_ascii=True).replace("<", "\\u003c")
-    return f"""<!doctype html>
+    structured_data = ""
+    if page == "index":
+        website = {"@context": "https://schema.org", "@type": "WebSite",
+                   "name": "Clash of Rust", "url": SITE_URL + "/"}
+        structured_data = '<script type="application/ld+json">' + json.dumps(website) + '</script>\n'
+    document = f"""<!doctype html>
 <html lang="{text['html_lang']}">
 <head>
 <meta charset="utf-8">
@@ -249,10 +268,11 @@ def layout(lang, page, title, description, body, release_data):
 <meta name="color-scheme" content="light dark">
 <script src="{root}theme.js"></script>
 <link rel="canonical" href="{canonical}">
-<link rel="alternate" hreflang="en" href="{SITE_URL}/en/{page_path}">
-<link rel="alternate" hreflang="zh-CN" href="{SITE_URL}/{page_path}">
-<link rel="alternate" hreflang="x-default" href="{SITE_URL}/{page_path}">
-<link rel="icon" href="{root}assets/cat.png">
+<link rel="alternate" hreflang="en" href="{SITE_URL}{site_path('en', page)}">
+<link rel="alternate" hreflang="zh-CN" href="{SITE_URL}{site_path('zh', page)}">
+<link rel="alternate" hreflang="x-default" href="{SITE_URL}{site_path('zh', page)}">
+<meta property="og:site_name" content="Clash of Rust">
+{structured_data}<link rel="icon" href="{root}assets/cat.png">
 <link rel="preload" href="{root}assets/fonts/national-park.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="{root}assets/fonts/departure-mono.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="{root}assets/fonts/noto-sans-sc-display.woff2" as="font" type="font/woff2" crossorigin>
@@ -299,9 +319,10 @@ def layout(lang, page, title, description, body, release_data):
 </body>
 </html>
 """
+    return document if file_links else canonical_links(document, lang)
 
 
-def build():
+def build(file_links=False):
     data = json.loads((SRC / "content" / "tools.json").read_text(encoding="utf-8"))
     release_data = json.loads((SRC / "content" / "releases.json").read_text(encoding="utf-8"))
     memory = json.loads((SRC / "content" / "memory.json").read_text(encoding="utf-8"))
@@ -328,7 +349,7 @@ def build():
                 body = render_releases(release_data, lang, REPO_URL, root=root)
                 title = "版本记录 — Clash of Rust" if lang == "zh" else "Versions — Clash of Rust"
                 target = DIST / ("" if lang == "zh" else "en") / "releases.html"
-                target.write_text(layout(lang, page, title, title, body, release_data), encoding="utf-8")
+                target.write_text(layout(lang, page, title, title, body, release_data, file_links), encoding="utf-8")
                 print(f"  {target.relative_to(ROOT)}")
                 continue
             if not path.is_file():
@@ -366,9 +387,11 @@ def build():
             if leftover:
                 raise ValueError(f"{lang}/{page}: unresolved {leftover[:3]}")
             target = DIST / ("" if lang == "zh" else "en") / f"{page}.html"
-            target.write_text(layout(lang, page, meta["title"], meta["description"], body, release_data), encoding="utf-8", newline="\n")
+            target.write_text(layout(lang, page, meta["title"], meta["description"], body, release_data, file_links), encoding="utf-8", newline="\n")
             print(f"  {target.relative_to(ROOT)}")
 
 
 if __name__ == "__main__":
-    build()
+    parser = ArgumentParser(description=__doc__)
+    parser.add_argument("--file-links", action="store_true", help="use .html links for a plain file server")
+    build(file_links=parser.parse_args().file_links)

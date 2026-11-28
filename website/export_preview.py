@@ -19,7 +19,9 @@ def export():
     shell = '''<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Clash of Rust — 网站预览</title><style>html,body{margin:0;height:100%;background:#f8f3e7}iframe{width:100%;height:100%;border:0;display:block}</style><iframe title="Clash of Rust website"></iframe><script id="bundle" type="application/json">PAYLOAD</script><script>
 const bundle=JSON.parse(document.getElementById('bundle').textContent);
 function showPage(route){
- const [path,hash]=route.split('#');const key=path||'index.html';if(!bundle.pages[key])return;
+ const [path,hash]=route.split('#');const clean=path.replace(/^\\//,'');
+ const key=!clean||clean.endsWith('/')?clean+'index.html':clean.endsWith('.html')?clean:clean+'.html';
+ if(!bundle.pages[key])return;
  let html=bundle.pages[key].replace(/<link[^>]+rel="(?:stylesheet|preload)"[^>]*>/g,'');
  html=html.replace(/<script src="[^"]*theme.js"><\\/script>/,()=>'<script>'+bundle.theme+'<\\/script>');
  html=html.replace('</head>',()=>'<style>'+bundle.css+'</style></head>');

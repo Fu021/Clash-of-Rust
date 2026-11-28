@@ -5,11 +5,11 @@
 ## 预览与维护
 
 ```powershell
-python3 -B website/build.py
+python3 -B website/build.py --file-links
 python3 -m http.server 4311 --bind 127.0.0.1 --directory website/dist
 ```
 
-打开 `http://127.0.0.1:4311/`，英文版为 `/en/`。编辑 `src/`，不要直接编辑 `dist/`。旧 `/zh/` 链接通过部署重定向保持可用。首页内存数据保留客户端与内核统计边界，不把演示图片作为性能证据。
+打开 `http://127.0.0.1:4311/`，英文版为 `/en/`。编辑 `src/`，不要直接编辑 `dist/`。正式构建使用 sitemap 对应的无扩展名站内链接，Cloudflare 静态路由兼容旧 `.html`，`_redirects` 保留 `/zh/` 与 `/features`。`--file-links` 为普通本地文件服务器保留 `.html` 链接。首页内存数据保留客户端与内核统计边界，不把演示图片作为性能证据。
 
 手机分享可以导出含全部页面、样式、脚本、字体和插画的单文件：
 
